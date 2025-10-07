@@ -1,0 +1,7 @@
+from .base import *
+
+DEBUG = False
+SECURE_SSL_REDIRECT = True
+
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = []
