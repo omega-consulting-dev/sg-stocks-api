@@ -13,13 +13,23 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
+TENANT_BASE_DOMAIN = env('BASE_DOMAIN', default='localhost') # variable customiser pour faciliter la creation des domaines(tenant1 au lieux de tenant1.mydomain.com)
 TENANT_MODEL = "tenants.Company"
 TENANT_DOMAIN_MODEL = "tenants.Domain"
+PUBLIC_SCHEMA_NAME = "public"
+PUBLIC_SCHEMA_URLCONF = 'myproject.urls_public'
 DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
 
 # Database
 DATABASES = {
-    'default': env.db(),
+    "default": {
+        "ENGINE": "django_tenants.postgresql_backend",
+        "NAME": env("POSTGRES_DB", default="app"),
+        "USER": env("POSTGRES_USER", default="app"),
+        "PASSWORD": env("POSTGRES_PASSWORD", default=""),
+        "HOST": env("POSTGRES_HOST", default="localhost"),
+        "PORT": env("POSTGRES_PORT", default="5432"),
+    }
 }
 
 # Redis
@@ -33,6 +43,13 @@ CACHES = {
     }
 }
 
+# Celery
+CELERY_BROKER_URL = env('REDIS_URL')
+CELERY_RESULT_BACKEND = env('REDIS_URL')
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("SIMPLE_JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=30))),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=int(env("SIMPLE_JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7))),
@@ -45,13 +62,6 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
 }
-
-# Celery
-CELERY_BROKER_URL = env('REDIS_URL')
-CELERY_RESULT_BACKEND = env('REDIS_URL')
-CELERY_ACCEPT_CONTENT = ['application/json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
 
 # django guardian
 ANONYMOUS_USER_ID = -1
@@ -71,30 +81,42 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'users.User'
 
 # Application definition
-INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
+SHARED_APPS = (
+    'django_tenants',
     'django.contrib.contenttypes',
+    'django.contrib.auth',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'django.contrib.admin',
     'django.contrib.staticfiles',
 
-    # external apps
+    # External
     'rest_framework',
     'rest_framework_simplejwt',
     'drf_spectacular',
     'django_filters',
     'corsheaders',
     'drf_yasg',
-    'guardian',
     'celery',
-    'auditlog',
-    
-    # local apps
-    'apps.users',
+
+    # Local
+    'apps.accounts',
     'apps.tenants',
-    'apps.accounts'
-]
+    'apps.users'
+)
+
+TENANT_APPS = (
+    'django.contrib.contenttypes',
+    'django.contrib.auth',
+    'django.contrib.sessions',
+
+    # External
+    'guardian',
+    'auditlog',
+
+    # 'apps.users',
+)
+INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
     'django_tenants.middleware.main.TenantMainMiddleware',
