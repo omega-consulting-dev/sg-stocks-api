@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.utils.translation import gettext_lazy as _
+from django_tenants.utils import tenant_context
 
 # from guardian.mixins import GuardianUserMixin
 # from apps.tenants.models import Company
@@ -32,6 +33,20 @@ class User(AbstractUser):
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
+
+    @staticmethod
+    def create_tenant_admin(company, email, password):
+        """
+        Crée le premier utilisateur administrateur pour le nouveau tenant.
+        """
+        with tenant_context(company):
+            
+            user = User.objects.create_superuser(
+                email=email,
+                password=password,
+                username="Admin",
+            )
+            return user
 
 # class Role(models.Model):
 #     name = models.CharField(max_length=50, unique=True)  # e.g., 'gérant', 'caissier'

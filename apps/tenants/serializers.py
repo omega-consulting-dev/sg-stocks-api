@@ -1,6 +1,8 @@
 # tenants/serializers.py
 from rest_framework import serializers
+from django.db import transaction
 from .models import Company, Domain
+from apps.accounts.models import User
 
 class DomainSerializer(serializers.ModelSerializer):
     class Meta:
@@ -41,6 +43,7 @@ class TenantProvisioningSerializer(serializers.Serializer):
              raise serializers.ValidationError("Ce sous-domaine est réservé.")
         return value
 
+    @transaction.atomic()
     def create(self, validated_data):
         
         tenant_name = validated_data['name']
@@ -59,13 +62,11 @@ class TenantProvisioningSerializer(serializers.Serializer):
             is_primary=True
         )
 
-        # Création de l'utilisateur administrateur (À implémenter dans l'app accounts)
-        # L'application accounts/models.py doit contenir le modèle User avec la ForeignKey vers Company.
-        # Cette logique sera déplacée/appellée depuis l'app accounts pour éviter la dépendance circulaire.
-        # create_tenant_admin(
-        #     company=company, 
-        #     email=validated_data['admin_email'], 
-        #     password=validated_data['admin_password']
-        # )
+        # Création de l'utilisateur administrateur du tenant
+        User.create_tenant_admin(
+            company=company, 
+            email=validated_data['admin_email'], 
+            password=validated_data['admin_password']
+        )
 
         return company
