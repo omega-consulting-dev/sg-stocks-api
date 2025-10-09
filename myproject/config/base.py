@@ -68,7 +68,8 @@ ANONYMOUS_USER_ID = -1
 
 # Guardian pour permissions granulaires
 AUTHENTICATION_BACKENDS = (
-    'django.contrib.auth.backends.ModelBackend',
+    # 'django.contrib.auth.backends.ModelBackend',
+    'apps.accounts.backends.TenantAuthBackend',
     'guardian.backends.ObjectPermissionBackend',
 )
 
