@@ -1,7 +1,7 @@
 from rest_framework.test import APITestCase
 from django.urls import reverse_lazy
 
-from apps.users.models import User
+from apps.main.models import User
 
 
 class UserTest(APITestCase):

@@ -78,7 +78,7 @@ WSGI_APPLICATION = 'myproject.wsgi.application'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-AUTH_USER_MODEL = 'users.User'
+AUTH_USER_MODEL = 'main.User'
 
 # Application definition
 SHARED_APPS = (
@@ -100,9 +100,8 @@ SHARED_APPS = (
     'celery',
 
     # Local
-    'apps.accounts',
     'apps.tenants',
-    'apps.users'
+    'apps.main'
 )
 
 TENANT_APPS = (
@@ -114,7 +113,8 @@ TENANT_APPS = (
     'guardian',
     'auditlog',
 
-    # 'apps.users',
+    # Local
+    'apps.accounts',
 )
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 

@@ -4,7 +4,6 @@ from django.urls import path, include
 
 from myproject import config
 
-# Ajoute la documentation Swagger/ReDoc seulement en environnement de développement
 import os
 route_doc = []
 if os.getenv("ENV_NAME", "dev") == "dev":
@@ -33,5 +32,5 @@ if os.getenv("ENV_NAME", "dev") == "dev":
 urlpatterns = [
     *route_doc,
     path('admin/', admin.site.urls),
-    path('api/v1/', include('apps.urls')),
+    path('api/v1/', include('apps.urls_public')),
 ] + static(config.MEDIA_URL, document_root=config.MEDIA_ROOT)

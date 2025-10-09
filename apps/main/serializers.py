@@ -6,7 +6,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from apps.users.models import User
+from apps.main.models import User
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:

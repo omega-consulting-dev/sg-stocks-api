@@ -53,9 +53,8 @@ class TenantProvisioningSerializer(serializers.Serializer):
             plan=plan,
         )
         
-        # Le domaine complet sera construit dans la View (maboutique.mon-erp.com)
         Domain.objects.create(
-            domain=validated_data['subdomain'],
+            domain=validated_data['subdomain'] + '.' + self.context.get('base_domain'),
             tenant=company, 
             is_primary=True
         )

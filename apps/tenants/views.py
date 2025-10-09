@@ -31,7 +31,7 @@ class TenantProvisioningView(APIView):
     """
     Endpoint pour la création et le provisioning d'un nouveau Tenant.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminUser]
 
     def post(self, request, *args, **kwargs):
 

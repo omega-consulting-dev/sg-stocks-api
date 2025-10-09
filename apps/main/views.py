@@ -8,9 +8,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework import viewsets
 from rest_framework.exceptions import MethodNotAllowed
 
-from apps.users.serializers import RegisterSerializer, LoginSerializer, UserSerializer
-from apps.users.models import User
-from apps.users.permissions import AdminPermission
+from apps.main.serializers import RegisterSerializer, LoginSerializer, UserSerializer
+from apps.main.models import User
+from apps.main.permissions import AdminPermission
 
 
 class RegisterView(generics.CreateAPIView):
@@ -30,4 +30,3 @@ class RegisterView(generics.CreateAPIView):
 
 class LoginView(TokenObtainPairView):
     serializer_class = LoginSerializer
-
