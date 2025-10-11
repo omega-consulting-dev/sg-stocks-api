@@ -10,7 +10,6 @@ from rest_framework.exceptions import MethodNotAllowed
 
 from apps.main.serializers import RegisterSerializer, LoginSerializer, UserSerializer
 from apps.main.models import User
-from apps.main.permissions import AdminPermission
 
 
 class RegisterView(generics.CreateAPIView):

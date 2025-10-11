@@ -2,7 +2,18 @@ from .base import *
 
 DEBUG = True
 CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOWED_ORIGINS = [
-    'http://192.168.100.57',
-    'http://192.168.100.93',
-]
+
+ALLOWED_HOSTS = ['*']
+
+# Debug Toolbar
+INSTALLED_APPS += ['debug_toolbar', 'django_extensions']
+
+MIDDLEWARE += ['debug_toolbar.middleware.DebugToolbarMiddleware']
+
+INTERNAL_IPS = ['127.0.0.1', 'localhost']
+
+# Email backend for development
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# Disable HTTPS redirect in development
+SECURE_SSL_REDIRECT = False

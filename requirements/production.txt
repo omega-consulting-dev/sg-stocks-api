@@ -1,1 +1,4 @@
 -r common.txt
+
+# server
+gunicorn>=23.0.0
