@@ -188,9 +188,9 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'apps.accounts.middlewares.UserSessionMiddleware',
-    'apps.accounts.middlewares.UserActivityMiddleware',
-    'apps.accounts.middlewares.LoginLogoutMiddleware',
+    # 'apps.accounts.middlewares.UserSessionMiddleware',
+    # 'apps.accounts.middlewares.UserActivityMiddleware',
+    # 'apps.accounts.middlewares.LoginLogoutMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
 ]
 

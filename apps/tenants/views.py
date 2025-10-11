@@ -28,41 +28,38 @@ class DomainReadOnlyViewSet(viewsets.ReadOnlyModelViewSet):
 
 class TenantProvisioningView(APIView):
     """
-    Endpoint pour la création et le provisioning d'un nouveau Tenant.
+    Endpoint complet pour la création d'un nouveau tenant (Company + Domain + Admin).
+    Accessible uniquement aux super-admins sur le schéma public.
     """
     permission_classes = [IsAdminUser]
 
     def post(self, request, *args, **kwargs):
-
-        base_domain = settings.TENANT_BASE_DOMAIN
         serializer = TenantProvisioningSerializer(
-            data=request.data, 
-            context={'base_domain': base_domain}
+            data=request.data,
+            context={"base_domain": settings.TENANT_BASE_DOMAIN}
         )
-        
+
         if serializer.is_valid():
             try:
-                tenant = serializer.save()
-                
-                # execution des migration dans le schema
-                from django_tenants.utils import schema_context
-                from django.core.management import call_command
-
-                with schema_context(tenant.schema_name):
-                    call_command('migrate_schemas', schema_name=tenant.schema_name, verbosity=0)
-
+                result = serializer.save()
+                company = result["company"]
+                domain = result["domain"]
+                admin_user = result["admin_user"]
 
                 return Response({
-                    "message": "Tenant créé et provisionné avec succès.",
-                    "schema_name": tenant.schema_name,
-                    "domain": f"{tenant.schema_name}.{base_domain}"
+                    "message": "Tenant créé avec succès !",
+                    "company": company.name,
+                    "schema_name": company.schema_name,
+                    "domain": domain.domain,
+                    "admin_username": admin_user.username,
                 }, status=status.HTTP_201_CREATED)
-            
+
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 return Response({
-                    "error": "Erreur lors du provisioning du tenant.", 
+                    "error": "Erreur lors de la création du tenant",
                     "details": str(e)
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    

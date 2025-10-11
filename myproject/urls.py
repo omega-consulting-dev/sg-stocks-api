@@ -27,3 +27,7 @@ urlpatterns = [
 if config.DEBUG:
     urlpatterns += static(config.MEDIA_URL, document_root=config.MEDIA_ROOT)
     urlpatterns += static(config.STATIC_URL, document_root=config.STATIC_ROOT)
+
+    if 'debug_toolbar' in config.INSTALLED_APPS:
+        import debug_toolbar
+        urlpatterns += [path('__debug__/', include(debug_toolbar.urls))]
