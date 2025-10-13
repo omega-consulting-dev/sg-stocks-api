@@ -8,6 +8,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
+from django.utils import timezone
+
+from core.utils.export_utils import ExcelExporter, PDFExporter
+import pandas as pd
 
 from apps.products.models import Product, ProductCategory, ProductImage
 from apps.products.serializers import (
@@ -159,6 +163,160 @@ class ProductViewSet(viewsets.ModelViewSet):
             ])
         
         return response
+    
+    @extend_schema(
+        summary="Exporter les produits en Excel",
+        tags=["Products"]
+    )
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export products to Excel."""
+        products = self.filter_queryset(self.get_queryset())
+        
+        wb, ws = ExcelExporter.create_workbook("Produits")
+        
+        # Headers
+        columns = [
+            'Référence', 'Nom', 'Catégorie', 'Prix Achat', 'Prix Vente',
+            'TVA (%)', 'Stock Min', 'Stock Optimal', 'Actif'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        # Data
+        for row_num, product in enumerate(products, 2):
+            ws.cell(row=row_num, column=1, value=product.reference)
+            ws.cell(row=row_num, column=2, value=product.name)
+            ws.cell(row=row_num, column=3, value=product.category.name)
+            ws.cell(row=row_num, column=4, value=float(product.cost_price))
+            ws.cell(row=row_num, column=5, value=float(product.selling_price))
+            ws.cell(row=row_num, column=6, value=float(product.tax_rate))
+            ws.cell(row=row_num, column=7, value=product.minimum_stock)
+            ws.cell(row=row_num, column=8, value=product.optimal_stock)
+            ws.cell(row=row_num, column=9, value='Oui' if product.is_active else 'Non')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"produits_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+
+
+    @extend_schema(
+        summary="Exporter les produits en PDF",
+        tags=["Products"]
+    )
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export products to PDF."""
+        products = self.filter_queryset(self.get_queryset())
+        
+        buffer = io.BytesIO()
+        doc = PDFExporter.create_document(buffer)
+        styles = PDFExporter.get_styles()
+        story = []
+        
+        # Title
+        story.append(Paragraph("Liste des Produits", styles['CustomTitle']))
+        story.append(Spacer(1, 0.5*inch))
+        
+        # Date
+        date_str = timezone.now().strftime('%d/%m/%Y %H:%M')
+        story.append(Paragraph(f"Généré le: {date_str}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Table
+        data = [['Réf.', 'Nom', 'Catégorie', 'Prix Vente', 'Stock']]
+        for product in products[:100]:  # Limit to 100 for PDF
+            data.append([
+                product.reference,
+                product.name[:30],
+                product.category.name,
+                f"{product.selling_price:,.0f}",
+                str(product.get_current_stock())
+            ])
+        
+        table = PDFExporter.create_table(data)
+        story.append(table)
+        
+        doc.build(story)
+        
+        filename = f"produits_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return PDFExporter.generate_response(buffer, filename)
+
+
+    @extend_schema(
+        summary="Importer des produits depuis Excel",
+        tags=["Products"],
+        request={'multipart/form-data': {'type': 'object', 'properties': {'file': {'type': 'string', 'format': 'binary'}}}}
+    )
+    @action(detail=False, methods=['post'])
+    def import_excel(self, request):
+        """Import products from Excel file."""
+        if 'file' not in request.FILES:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        file = request.FILES['file']
+        
+        try:
+            df = pd.read_excel(file)
+            
+            required_columns = ['Référence', 'Nom', 'Catégorie', 'Prix Vente']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                return Response(
+                    {'error': f'Colonnes manquantes: {", ".join(missing_columns)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            created_count = 0
+            updated_count = 0
+            errors = []
+            
+            for index, row in df.iterrows():
+                try:
+                    # Get or create category
+                    category, _ = ProductCategory.objects.get_or_create(
+                        name=row['Catégorie'],
+                        defaults={'created_by': request.user}
+                    )
+                    
+                    # Get or create product
+                    product, created = Product.objects.update_or_create(
+                        reference=row['Référence'],
+                        defaults={
+                            'name': row['Nom'],
+                            'category': category,
+                            'selling_price': row.get('Prix Vente', 0),
+                            'cost_price': row.get('Prix Achat', 0),
+                            'tax_rate': row.get('TVA (%)', 19.25),
+                            'minimum_stock': row.get('Stock Min', 0),
+                            'optimal_stock': row.get('Stock Optimal', 0),
+                            'created_by': request.user if created else None,
+                            'updated_by': request.user
+                        }
+                    )
+                    
+                    if created:
+                        created_count += 1
+                    else:
+                        updated_count += 1
+                        
+                except Exception as e:
+                    errors.append(f"Ligne {index + 2}: {str(e)}")
+            
+            return Response({
+                'message': 'Import terminé',
+                'created': created_count,
+                'updated': updated_count,
+                'errors': errors
+            })
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors de l\'import: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
 
 @extend_schema_view(

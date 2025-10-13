@@ -11,6 +11,8 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, F, Q
 from django.utils import timezone
 
+from core.utils.export_utils import ExcelExporter
+
 from apps.inventory.models import (
     Store, Stock, StockMovement, StockTransfer, 
     StockTransferLine, Inventory, InventoryLine
@@ -296,3 +298,39 @@ class InventoryViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(inventory)
         return Response(serializer.data)
+    
+    @extend_schema(summary="Exporter l'état des stocks en Excel", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export stock status to Excel."""
+        stocks = Stock.objects.select_related('product', 'store').all()
+        
+        wb, ws = ExcelExporter.create_workbook("État des Stocks")
+        
+        columns = [
+            'Produit', 'Référence', 'Magasin', 'Quantité',
+            'Quantité Réservée', 'Quantité Disponible', 'Stock Min', 'Statut'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, stock in enumerate(stocks, 2):
+            ws.cell(row=row_num, column=1, value=stock.product.name)
+            ws.cell(row=row_num, column=2, value=stock.product.reference)
+            ws.cell(row=row_num, column=3, value=stock.store.name)
+            ws.cell(row=row_num, column=4, value=float(stock.quantity))
+            ws.cell(row=row_num, column=5, value=float(stock.reserved_quantity))
+            ws.cell(row=row_num, column=6, value=float(stock.available_quantity))
+            ws.cell(row=row_num, column=7, value=stock.product.minimum_stock)
+            
+            if stock.quantity < stock.product.minimum_stock:
+                status = 'ALERTE'
+            elif stock.quantity == 0:
+                status = 'RUPTURE'
+            else:
+                status = 'OK'
+            ws.cell(row=row_num, column=8, value=status)
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"stocks_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)

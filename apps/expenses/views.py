@@ -2,6 +2,10 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
+
+from core.utils.export_utils import ExcelExporter
+
 from apps.expenses.models import Expense, ExpenseCategory
 from apps.expenses.serializers import ExpenseSerializer, ExpenseCategorySerializer
 
@@ -78,3 +82,32 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(expense)
         return Response(serializer.data)
+    
+    @extend_schema(summary="Exporter les dépenses en Excel", tags=["Expenses"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export expenses to Excel."""
+        expenses = self.filter_queryset(self.get_queryset())
+        
+        wb, ws = ExcelExporter.create_workbook("Dépenses")
+        
+        columns = [
+            'N° Dépense', 'Date', 'Catégorie', 'Bénéficiaire',
+            'Montant', 'Statut', 'Date Paiement', 'Mode Paiement'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, expense in enumerate(expenses, 2):
+            ws.cell(row=row_num, column=1, value=expense.expense_number)
+            ws.cell(row=row_num, column=2, value=expense.expense_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=3, value=expense.category.name)
+            ws.cell(row=row_num, column=4, value=expense.beneficiary)
+            ws.cell(row=row_num, column=5, value=float(expense.amount))
+            ws.cell(row=row_num, column=6, value=expense.get_status_display())
+            ws.cell(row=row_num, column=7, value=expense.payment_date.strftime('%d/%m/%Y') if expense.payment_date else 'N/A')
+            ws.cell(row=row_num, column=8, value=expense.get_payment_method_display() if expense.payment_method else 'N/A')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"depenses_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
