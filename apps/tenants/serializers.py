@@ -7,7 +7,7 @@ from apps.accounts.models import User, Role
 class DomainSerializer(serializers.ModelSerializer):
     class Meta:
         model = Domain
-        fields = ('domain', 'is_primary')
+        fields = ('id', 'domain', 'is_primary')
         read_only_fields = ('tenant',)
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -16,8 +16,8 @@ class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
         fields = (
-            'id', 'name', 'schema_name', 'created_on', 'plan', 
-            'max_users', 'is_active', 'domains'
+            'id', 'name', 'schema_name', 'email', 'phone', 'address',
+            'plan', 'is_active', 'created_on', 'domains'
         )
         read_only_fields = ('schema_name', 'created_on')
 

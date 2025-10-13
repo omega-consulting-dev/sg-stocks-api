@@ -1,0 +1,103 @@
+from rest_framework import serializers
+from apps.loans.models import Loan, LoanPayment, LoanSchedule
+
+
+class LoanScheduleSerializer(serializers.ModelSerializer):
+    balance_due = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = LoanSchedule
+        fields = [
+            'id', 'installment_number', 'due_date', 'principal_amount',
+            'interest_amount', 'total_amount', 'paid_amount', 'balance_due',
+            'status', 'payment_date', 'is_overdue'
+        ]
+
+
+class LoanPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanPayment
+        fields = [
+            'id', 'payment_number', 'loan', 'payment_date', 'amount',
+            'principal_amount', 'interest_amount', 'payment_method',
+            'reference', 'notes', 'created_at'
+        ]
+
+
+class LoanListSerializer(serializers.ModelSerializer):
+    loan_type_display = serializers.CharField(source='get_loan_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    balance_due = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    
+    class Meta:
+        model = Loan
+        fields = [
+            'id', 'loan_number', 'lender_name', 'loan_type', 'loan_type_display',
+            'principal_amount', 'interest_rate', 'duration_months', 'start_date',
+            'total_amount', 'paid_amount', 'balance_due', 'status', 'status_display'
+        ]
+
+
+class LoanDetailSerializer(serializers.ModelSerializer):
+    schedule = LoanScheduleSerializer(many=True, read_only=True)
+    payments = LoanPaymentSerializer(many=True, read_only=True)
+    balance_due = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    is_fully_paid = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = Loan
+        fields = [
+            'id', 'loan_number', 'loan_type', 'lender_name', 'lender_contact',
+            'principal_amount', 'interest_rate', 'duration_months', 'start_date',
+            'end_date', 'status', 'total_amount', 'paid_amount', 'balance_due',
+            'is_fully_paid', 'purpose', 'notes', 'schedule', 'payments',
+            'created_at', 'updated_at'
+        ]
+
+
+class LoanCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Loan
+        fields = [
+            'loan_type', 'lender_name', 'lender_contact', 'principal_amount',
+            'interest_rate', 'duration_months', 'start_date', 'end_date', 'purpose', 'notes'
+        ]
+    
+    def create(self, validated_data):
+        # Generate loan number
+        count = Loan.objects.count() + 1
+        validated_data['loan_number'] = f"LOAN{count:06d}"
+        
+        loan = Loan.objects.create(**validated_data)
+        
+        # Calculate total amount
+        loan.calculate_total_amount()
+        loan.save()
+        
+        # Generate schedule
+        self._generate_schedule(loan)
+        
+        return loan
+    
+    def _generate_schedule(self, loan):
+        """Generate loan repayment schedule."""
+        from dateutil.relativedelta import relativedelta
+        
+        monthly_payment = loan.calculate_monthly_payment()
+        
+        for i in range(loan.duration_months):
+            due_date = loan.start_date + relativedelta(months=i+1)
+            
+            # Simple calculation (can be improved with amortization formula)
+            interest = (loan.principal_amount * loan.interest_rate / 100) / loan.duration_months
+            principal = monthly_payment - interest
+            
+            LoanSchedule.objects.create(
+                loan=loan,
+                installment_number=i + 1,
+                due_date=due_date,
+                principal_amount=principal,
+                interest_amount=interest,
+                total_amount=monthly_payment
+            )

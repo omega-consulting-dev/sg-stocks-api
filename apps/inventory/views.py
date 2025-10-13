@@ -1,3 +1,298 @@
-from django.shortcuts import render
+"""
+Inventory views for API.
+"""
 
-# Create your views here.
+from rest_framework import viewsets, filters, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema, extend_schema_view
+from django.db.models import Sum, F, Q
+from django.utils import timezone
+
+from apps.inventory.models import (
+    Store, Stock, StockMovement, StockTransfer, 
+    StockTransferLine, Inventory, InventoryLine
+)
+from apps.inventory.serializers import (
+    StoreSerializer, StockSerializer, StockMovementSerializer,
+    StockTransferListSerializer, StockTransferDetailSerializer,
+    StockTransferCreateSerializer, InventoryListSerializer,
+    InventoryDetailSerializer, InventoryCreateSerializer
+)
+
+
+@extend_schema_view(
+    list=extend_schema(summary="Liste des magasins", tags=["Inventory"]),
+    retrieve=extend_schema(summary="Détail d'un magasin", tags=["Inventory"]),
+    create=extend_schema(summary="Créer un magasin", tags=["Inventory"]),
+    update=extend_schema(summary="Modifier un magasin", tags=["Inventory"]),
+)
+class StoreViewSet(viewsets.ModelViewSet):
+    """ViewSet for Store model."""
+    
+    queryset = Store.objects.select_related('manager')
+    serializer_class = StoreSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['store_type', 'is_active']
+    search_fields = ['name', 'code', 'city']
+    ordering_fields = ['name', 'code', 'created_at']
+    ordering = ['name']
+    
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+    
+    @extend_schema(summary="Statistiques d'un magasin", tags=["Inventory"])
+    @action(detail=True, methods=['get'])
+    def stats(self, request, pk=None):
+        """Get store statistics."""
+        store = self.get_object()
+        stats = {
+            'total_products': store.stocks.count(),
+            'total_stock_value': store.stocks.aggregate(
+                total=Sum(F('quantity') * F('product__cost_price'))
+            )['total'] or 0,
+            'low_stock_items': store.stocks.filter(
+                quantity__lt=F('product__minimum_stock')
+            ).count(),
+        }
+        return Response(stats)
+
+
+@extend_schema_view(
+    list=extend_schema(summary="Liste des stocks", tags=["Inventory"]),
+    retrieve=extend_schema(summary="Détail d'un stock", tags=["Inventory"]),
+)
+class StockViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for Stock model (read-only)."""
+    
+    queryset = Stock.objects.select_related('product', 'store')
+    serializer_class = StockSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['product', 'store']
+    search_fields = ['product__name', 'product__reference']
+    ordering_fields = ['quantity', 'created_at']
+    ordering = ['-created_at']
+    
+    @extend_schema(summary="Produits en rupture", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def low_stock(self, request):
+        """Get low stock items."""
+        queryset = self.get_queryset().filter(
+            quantity__lt=F('product__minimum_stock')
+        )
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+
+@extend_schema_view(
+    list=extend_schema(summary="Liste des mouvements", tags=["Inventory"]),
+    retrieve=extend_schema(summary="Détail d'un mouvement", tags=["Inventory"]),
+    create=extend_schema(summary="Créer un mouvement", tags=["Inventory"]),
+)
+class StockMovementViewSet(viewsets.ModelViewSet):
+    """ViewSet for StockMovement model."""
+    
+    queryset = StockMovement.objects.select_related(
+        'product', 'store', 'destination_store', 'created_by'
+    )
+    serializer_class = StockMovementSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['product', 'store', 'movement_type']
+    search_fields = ['product__name', 'reference']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+    http_method_names = ['get', 'post', 'head', 'options']
+    
+    def perform_create(self, serializer):
+        movement = serializer.save(created_by=self.request.user)
+        self._update_stock(movement)
+    
+    def _update_stock(self, movement):
+        """Update stock based on movement type."""
+        stock, created = Stock.objects.get_or_create(
+            product=movement.product,
+            store=movement.store,
+            defaults={'quantity': 0, 'reserved_quantity': 0}
+        )
+        
+        if movement.movement_type == 'in':
+            stock.quantity += movement.quantity
+        elif movement.movement_type == 'out':
+            stock.quantity -= movement.quantity
+        
+        stock.save()
+
+
+@extend_schema_view(
+    list=extend_schema(summary="Liste des transferts", tags=["Inventory"]),
+    retrieve=extend_schema(summary="Détail d'un transfert", tags=["Inventory"]),
+    create=extend_schema(summary="Créer un transfert", tags=["Inventory"]),
+)
+class StockTransferViewSet(viewsets.ModelViewSet):
+    """ViewSet for StockTransfer model."""
+    
+    queryset = StockTransfer.objects.select_related(
+        'source_store', 'destination_store'
+    ).prefetch_related('lines__product')
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['source_store', 'destination_store', 'status']
+    search_fields = ['transfer_number']
+    ordering_fields = ['transfer_date', 'created_at']
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return StockTransferListSerializer
+        elif self.action == 'create':
+            return StockTransferCreateSerializer
+        return StockTransferDetailSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+    
+    @extend_schema(summary="Valider le transfert", tags=["Inventory"])
+    @action(detail=True, methods=['post'])
+    def validate_transfer(self, request, pk=None):
+        """Validate and send transfer."""
+        transfer = self.get_object()
+        
+        if transfer.status != 'draft':
+            return Response(
+                {'error': 'Seuls les transferts en brouillon peuvent être validés.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update quantities sent
+        for line in transfer.lines.all():
+            line.quantity_sent = line.quantity_requested
+            line.save()
+            
+            # Decrease stock in source
+            stock = Stock.objects.get(
+                product=line.product,
+                store=transfer.source_store
+            )
+            stock.quantity -= line.quantity_sent
+            stock.save()
+        
+        transfer.status = 'in_transit'
+        transfer.validated_by = request.user
+        transfer.save()
+        
+        serializer = self.get_serializer(transfer)
+        return Response(serializer.data)
+    
+    @extend_schema(summary="Recevoir le transfert", tags=["Inventory"])
+    @action(detail=True, methods=['post'])
+    def receive(self, request, pk=None):
+        """Receive transfer."""
+        transfer = self.get_object()
+        
+        if transfer.status != 'in_transit':
+            return Response(
+                {'error': 'Ce transfert ne peut pas être reçu.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update quantities received
+        for line in transfer.lines.all():
+            line.quantity_received = line.quantity_sent
+            line.save()
+            
+            # Increase stock in destination
+            stock, created = Stock.objects.get_or_create(
+                product=line.product,
+                store=transfer.destination_store,
+                defaults={'quantity': 0, 'reserved_quantity': 0}
+            )
+            stock.quantity += line.quantity_received
+            stock.save()
+        
+        transfer.status = 'received'
+        transfer.received_by = request.user
+        transfer.actual_arrival = timezone.now().date()
+        transfer.save()
+        
+        serializer = self.get_serializer(transfer)
+        return Response(serializer.data)
+
+
+@extend_schema_view(
+    list=extend_schema(summary="Liste des inventaires", tags=["Inventory"]),
+    retrieve=extend_schema(summary="Détail d'un inventaire", tags=["Inventory"]),
+    create=extend_schema(summary="Créer un inventaire", tags=["Inventory"]),
+)
+class InventoryViewSet(viewsets.ModelViewSet):
+    """ViewSet for Inventory model."""
+    
+    queryset = Inventory.objects.select_related('store').prefetch_related('lines__product')
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['store', 'status']
+    search_fields = ['inventory_number']
+    ordering_fields = ['inventory_date', 'created_at']
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return InventoryListSerializer
+        elif self.action == 'create':
+            return InventoryCreateSerializer
+        return InventoryDetailSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+    
+    @extend_schema(summary="Valider l'inventaire", tags=["Inventory"])
+    @action(detail=True, methods=['post'])
+    def validate_inventory(self, request, pk=None):
+        """Validate inventory and adjust stock."""
+        inventory = self.get_object()
+        
+        if inventory.status != 'completed':
+            return Response(
+                {'error': 'Seuls les inventaires terminés peuvent être validés.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Adjust stock based on differences
+        for line in inventory.lines.all():
+            if line.difference != 0:
+                stock = Stock.objects.get(
+                    product=line.product,
+                    store=inventory.store
+                )
+                stock.quantity = line.counted_quantity
+                stock.save()
+                
+                # Create adjustment movement
+                StockMovement.objects.create(
+                    product=line.product,
+                    store=inventory.store,
+                    movement_type='adjustment',
+                    quantity=abs(line.difference),
+                    reference=inventory.inventory_number,
+                    notes=f"Ajustement inventaire {inventory.inventory_number}",
+                    created_by=request.user
+                )
+        
+        inventory.status = 'validated'
+        inventory.validated_by = request.user
+        inventory.validation_date = timezone.now()
+        inventory.save()
+        
+        serializer = self.get_serializer(inventory)
+        return Response(serializer.data)

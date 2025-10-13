@@ -292,20 +292,6 @@ class User(AbstractUser, TimeStampedModel):
             return f"{self.supplier_company_name or self.get_full_name()} - Fournisseur"
         return self.username
     
-
-    @staticmethod
-    def create_tenant_admin(company, email, password):
-        """
-        Crée le premier utilisateur administrateur pour le nouveau tenant.
-        """
-        with tenant_context(company):
-            
-            user = User.objects.create_superuser(
-                email=email,
-                password=password,
-                username="Admin",
-            )
-            return user
     
     def get_all_roles(self):
         """Get all roles (primary + secondary)."""
