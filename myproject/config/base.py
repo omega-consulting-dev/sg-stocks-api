@@ -2,6 +2,7 @@
 from pathlib import Path
 import environ, os
 from datetime import timedelta
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env = environ.Env(DEBUG=(bool, False))
@@ -13,6 +14,7 @@ SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
+CORS_ALLOW_HEADERS = list(default_headers) + env.list('CORS_ALLOW_HEADERS', default=[])
 CORS_ALLOW_CREDENTIALS = True
 
 TENANT_BASE_DOMAIN = env('BASE_DOMAIN', default='localhost') # variable customiser pour faciliter la creation des domaines(tenant1 au lieux de tenant1.mydomain.com)
@@ -116,7 +118,7 @@ ANONYMOUS_USER_ID = -1
 # Guardian pour permissions granulaires
 AUTHENTICATION_BACKENDS = (
     # 'django.contrib.auth.backends.ModelBackend',
-    'apps.accounts.backends.TenantAuthBackend',
+    'apps.main.backends.TenantAuthBackend',
     'guardian.backends.ObjectPermissionBackend',
 )
 
@@ -179,7 +181,8 @@ TENANT_APPS = (
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
-    'django_tenants.middleware.main.TenantMainMiddleware',
+    'apps.tenants.middelware.TenantHeaderMiddleware',
+    # 'django_tenants.middleware.main.TenantMainMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -188,9 +191,9 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    # 'apps.accounts.middlewares.UserSessionMiddleware',
-    # 'apps.accounts.middlewares.UserActivityMiddleware',
-    # 'apps.accounts.middlewares.LoginLogoutMiddleware',
+    'apps.accounts.middlewares.UserSessionMiddleware',
+    'apps.accounts.middlewares.UserActivityMiddleware',
+    'apps.accounts.middlewares.LoginLogoutMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
 ]
 
