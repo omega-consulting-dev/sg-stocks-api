@@ -140,6 +140,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
     
     def get_assigned_stores_list(self, obj):
         from apps.inventory.serializers import StoreMinimalSerializer
+        print(":::::::::::::::::::::::::::::::::::::::Assigned stores:", obj)
         return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
     
     def get_customer_balance(self, obj):

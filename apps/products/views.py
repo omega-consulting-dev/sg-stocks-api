@@ -2,6 +2,7 @@
 Product views/viewsets for API.
 """
 
+import io
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -9,9 +10,12 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.utils import timezone
+from django.db import models
 
 from core.utils.export_utils import ExcelExporter, PDFExporter
 import pandas as pd
+from reportlab.platypus import Paragraph, Spacer
+from reportlab.lib.units import inch
 
 from apps.products.models import Product, ProductCategory, ProductImage
 from apps.products.serializers import (
@@ -291,12 +295,13 @@ class ProductViewSet(viewsets.ModelViewSet):
                             'tax_rate': row.get('TVA (%)', 19.25),
                             'minimum_stock': row.get('Stock Min', 0),
                             'optimal_stock': row.get('Stock Optimal', 0),
-                            'created_by': request.user if created else None,
                             'updated_by': request.user
                         }
                     )
                     
                     if created:
+                        product.created_by = request.user
+                        product.save()
                         created_count += 1
                     else:
                         updated_count += 1
