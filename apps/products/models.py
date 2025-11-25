@@ -5,7 +5,8 @@ Product and category models.
 from django.db import models
 from django.core.validators import MinValueValidator
 from core.models import TimeStampedModel, ActiveModel, AuditModel
-
+from django.db.models import UniqueConstraint
+from django.db.models.functions import Lower
 
 class ProductCategory(ActiveModel, AuditModel):
     """
@@ -23,6 +24,13 @@ class ProductCategory(ActiveModel, AuditModel):
     )
     
     class Meta:
+        constraints = [
+        UniqueConstraint(
+            Lower('name'),
+            'parent',
+            name='unique_lower_name_parent'
+            ),
+        ]
         verbose_name = "Catégorie de produit"
         verbose_name_plural = "Catégories de produits"
         ordering = ['name']

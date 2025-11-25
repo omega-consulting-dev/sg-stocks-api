@@ -36,6 +36,7 @@ DATABASES = {
     }
 }
 
+
 # Redis
 CACHES = {
     "default": {
@@ -128,8 +129,8 @@ WSGI_APPLICATION = 'myproject.wsgi.application'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-AUTH_USER_MODEL = 'accounts.User'
-
+AUTH_USER_MODEL = 'main.User'
+ 
 # Application definition
 SHARED_APPS = (
     'django_tenants',
@@ -181,8 +182,9 @@ TENANT_APPS = (
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
+    'django_tenants.middleware.main.TenantMainMiddleware',
     'apps.tenants.middelware.TenantHeaderMiddleware',
-    # 'django_tenants.middleware.main.TenantMainMiddleware',
+
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

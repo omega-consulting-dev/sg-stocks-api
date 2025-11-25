@@ -7,6 +7,8 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.utils import timezone
@@ -16,6 +18,8 @@ from core.utils.export_utils import ExcelExporter, PDFExporter
 import pandas as pd
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
+import csv
+from django.http import HttpResponse
 
 from apps.products.models import Product, ProductCategory, ProductImage
 from apps.products.serializers import (
@@ -88,12 +92,27 @@ class ProductViewSet(viewsets.ModelViewSet):
         return queryset
     
     def perform_create(self, serializer):
-        """Set created_by when creating product."""
-        serializer.save(created_by=self.request.user)
+        """Set created_by when creating product if user is authenticated."""
+        user = getattr(self.request, 'user', None)
+        # Only assign when user is authenticated and has a primary key
+        if user is not None and getattr(user, 'is_authenticated', False) and getattr(user, 'pk', None):
+            # assign by id to avoid assigning AnonymousUser proxy objects
+            serializer.save(created_by_id=user.pk)
+        else:
+            serializer.save()
     
     def perform_update(self, serializer):
-        """Set updated_by when updating product."""
-        serializer.save(updated_by=self.request.user)
+        """Set updated_by when updating product if user is authenticated."""
+        user = getattr(self.request, 'user', None)
+        # Only assign when user is authenticated and has a primary key
+        if user is not None and getattr(user, 'is_authenticated', False) and getattr(user, 'pk', None):
+            try:
+                serializer.save(updated_by_id=user.pk)
+            except ValueError:
+                # In case a non-User id slips through, fallback to saving without updated_by
+                serializer.save()
+        else:
+            serializer.save()
     
     def destroy(self, request, *args, **kwargs):
         """Soft delete: mark as inactive instead of deleting."""
@@ -109,7 +128,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def low_stock(self, request):
-        """Get products with low stock."""
+        """Liste des produits où le stock est inférieur au stock minimum.."""
         products = self.get_queryset().filter(
             stocks__quantity__lt=models.F('minimum_stock')
         ).distinct()
@@ -124,7 +143,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'])
     def add_image(self, request, pk=None):
-        """Add image to product."""
+        """Upload d’une image pour un produit."""
         product = self.get_object()
         serializer = ProductImageSerializer(data=request.data)
         
@@ -140,32 +159,30 @@ class ProductViewSet(viewsets.ModelViewSet):
         tags=["Produits"]
     )
     @action(detail=False, methods=['get'])
-    def export(self, request):
-        """Export products to CSV."""
-        import csv
-        from django.http import HttpResponse
-        
+    def export_csv(self, request, *args, **kwargs):
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="produits.csv"'
+
+        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
         
-        writer = csv.writer(response)
+        # Headers
         writer.writerow([
             'Référence', 'Nom', 'Catégorie', 'Prix d\'achat',
-            'Prix de vente', 'Stock minimum', 'Stock optimal', 'Actif'
+            'Prix de vente', 'Stock min', 'Stock optimal', 'Actif'
         ])
         
-        for product in self.get_queryset():
+        for product in Product.objects.all():
             writer.writerow([
-                product.reference,
-                product.name,
-                product.category.name,
-                product.cost_price,
-                product.selling_price,
-                product.minimum_stock,
-                product.optimal_stock,
-                'Oui' if product.is_active else 'Non',
+                product.reference.ljust(15),
+                product.name.ljust(30),
+                product.category.name.ljust(20),
+                f"{product.cost_price:,.2f}".rjust(10),
+                f"{product.selling_price:,.2f}".rjust(10),
+                str(product.minimum_stock).rjust(5),
+                str(product.optimal_stock).rjust(5),
+                ('Oui' if product.is_active else 'Non').ljust(5)
             ])
-        
+    
         return response
     
     @extend_schema(
@@ -252,7 +269,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         tags=["Products"],
         request={'multipart/form-data': {'type': 'object', 'properties': {'file': {'type': 'string', 'format': 'binary'}}}}
     )
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
     def import_excel(self, request):
         """Import products from Excel file."""
         if 'file' not in request.FILES:
@@ -271,44 +288,54 @@ class ProductViewSet(viewsets.ModelViewSet):
                     {'error': f'Colonnes manquantes: {", ".join(missing_columns)}'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             created_count = 0
             updated_count = 0
             errors = []
-            
+
+            # 🔥 On garde uniquement un user authentifié avec un ID
+            user_id = request.user.pk if (getattr(request.user, 'is_authenticated', False) and getattr(request.user, 'pk', None)) else None
+
             for index, row in df.iterrows():
                 try:
-                    # Get or create category
-                    category, _ = ProductCategory.objects.get_or_create(
+                    # --- CATEGORY ---
+                    category, created_cat = ProductCategory.objects.get_or_create(
                         name=row['Catégorie'],
-                        defaults={'created_by': request.user}
+                        defaults={'created_by_id': user_id}
                     )
-                    
-                    # Get or create product
+                    if not created_cat and user_id:
+                        category.updated_by_id = user_id
+                        category.save()
+
+                    # --- PRODUCT ---
+                    defaults = {
+                        'name': row['Nom'],
+                        'category': category,
+                        'selling_price': row.get('Prix Vente', 0),
+                        'cost_price': row.get('Prix Achat', 0),
+                        'tax_rate': row.get('TVA (%)', 19.25),
+                        'minimum_stock': row.get('Stock Min', 0),
+                        'optimal_stock': row.get('Stock Optimal', 0)
+                    }
+
+                    if user_id:
+                        defaults['updated_by_id'] = user_id
+
                     product, created = Product.objects.update_or_create(
                         reference=row['Référence'],
-                        defaults={
-                            'name': row['Nom'],
-                            'category': category,
-                            'selling_price': row.get('Prix Vente', 0),
-                            'cost_price': row.get('Prix Achat', 0),
-                            'tax_rate': row.get('TVA (%)', 19.25),
-                            'minimum_stock': row.get('Stock Min', 0),
-                            'optimal_stock': row.get('Stock Optimal', 0),
-                            'updated_by': request.user
-                        }
+                        defaults=defaults
                     )
-                    
-                    if created:
-                        product.created_by = request.user
+
+                    if created and user_id:
+                        product.created_by_id = user_id
                         product.save()
-                        created_count += 1
-                    else:
-                        updated_count += 1
-                        
+
+                    created_count += 1 if created else 0
+                    updated_count += 0 if created else 1
+
                 except Exception as e:
                     errors.append(f"Ligne {index + 2}: {str(e)}")
-            
+
             return Response({
                 'message': 'Import terminé',
                 'created': created_count,
@@ -323,6 +350,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
 
 
+    
 
 @extend_schema_view(
     list=extend_schema(
@@ -331,23 +359,223 @@ class ProductViewSet(viewsets.ModelViewSet):
         tags=["Catégories"]
     ),
 )
+
+
 class ProductCategoryViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for ProductCategory model.
-    """
-    
     queryset = ProductCategory.objects.filter(is_active=True)
     serializer_class = ProductCategorySerializer
     permission_classes = [IsAuthenticated]
+    authentication_classes = [JWTAuthentication]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'created_at']
     ordering = ['name']
-    
+
     def perform_create(self, serializer):
-        """Set created_by when creating category."""
-        serializer.save(created_by=self.request.user)
+        user = getattr(self.request, 'user', None)
+        if user is not None and getattr(user, 'is_authenticated', False):
+            try:
+                serializer.save(created_by=user)
+            except ValueError:
+                # Defensive: if created_by can't be assigned (AnonymousUser or wrong instance), save without it
+                serializer.save()
+        else:
+            serializer.save()
+
     
     def perform_update(self, serializer):
-        """Set updated_by when updating category."""
-        serializer.save(updated_by=self.request.user)
+        user = getattr(self.request, 'user', None)
+        if user is not None and getattr(user, 'is_authenticated', False):
+            try:
+                serializer.save(updated_by=user)
+            except ValueError:
+                serializer.save()
+        else:
+            serializer.save()
+
+
+    @extend_schema(
+        summary="Exporter les categosries de produit en Excel",
+        tags=["Categories"]
+    )
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export products to Excel."""
+        productscategories = self.filter_queryset(self.get_queryset())
+        
+        wb, ws = ExcelExporter.create_workbook("Categories")
+        
+        # Headers
+        columns = [
+            'Numero','Nom', 'description','Actif'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        # Data
+        for row_num, category in enumerate(productscategories, 2):
+            ws.cell(row=row_num, column=1, value=category.id)
+            ws.cell(row=row_num, column=2, value=category.name)
+            ws.cell(row=row_num, column=3, value=(category.description or ''))
+            ws.cell(row=row_num, column=4, value='Oui' if category.is_active else 'Non')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"categorie_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+
+
+
+    @extend_schema(
+        summary="Exporter les categories en PDF",
+        tags=["Productscategories"]
+    )
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export categories to PDF."""
+        categories = self.filter_queryset(self.get_queryset())
+        
+        buffer = io.BytesIO()
+        doc = PDFExporter.create_document(buffer)
+        styles = PDFExporter.get_styles()
+        story = []
+        
+        # Title
+        story.append(Paragraph("Liste des categories", styles['CustomTitle']))
+        story.append(Spacer(1, 0.5*inch))
+        
+        # Date
+        date_str = timezone.now().strftime('%d/%m/%Y %H:%M')
+        story.append(Paragraph(f"Généré le: {date_str}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Table
+        data = [['Numero.', 'Nom', 'Description']]
+        for category in categories[:100]:  # Limit to 100 for PDF
+            data.append([
+                category.id,
+                category.name,
+                category.description,
+
+            ])
+        
+        table = PDFExporter.create_table(data)
+        story.append(table)
+        
+        doc.build(story)
+        
+        filename = f"Categories_produits_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return PDFExporter.generate_response(buffer, filename)
+
+
+    @extend_schema(
+        summary="Importer les catégories depuis Excel",
+        tags=["Categories"],
+        request={'multipart/form-data': {'type': 'object', 'properties': {'file': {'type': 'string', 'format': 'binary'}}}}
+    )
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def import_excel(self, request):
+        """Import product categories from an Excel file.
+
+        Expected headers (flexible): 'Nom' or 'Name' (required), 'Description' (optional), 'Actif'/'Active' (optional).
+        """
+        if 'file' not in request.FILES:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+
+        file = request.FILES['file']
+
+        try:
+            df = pd.read_excel(file)
+
+            # Normalize column names to find relevant columns
+            columns_map = {c.strip().lower(): c for c in df.columns}
+
+            name_col = None
+            for candidate in ('nom', 'name'):
+                if candidate in columns_map:
+                    name_col = columns_map[candidate]
+                    break
+
+            if not name_col:
+                return Response({'error': 'Colonne obligatoire manquante: Nom'}, status=status.HTTP_400_BAD_REQUEST)
+
+            desc_col = None
+            for candidate in ('description', 'desc'):
+                if candidate in columns_map:
+                    desc_col = columns_map[candidate]
+                    break
+
+            active_col = None
+            for candidate in ('actif', 'active', 'is_active'):
+                if candidate in columns_map:
+                    active_col = columns_map[candidate]
+                    break
+
+            created_count = 0
+            updated_count = 0
+            errors = []
+
+            user = request.user if getattr(request.user, 'is_authenticated', False) else None
+
+            for index, row in df.iterrows():
+                try:
+                    raw_name = row.get(name_col)
+                    if pd.isna(raw_name) or str(raw_name).strip() == '':
+                        errors.append(f"Ligne {index + 2}: nom de catégorie vide")
+                        continue
+
+                    name = str(raw_name).strip()
+
+                    defaults = {}
+                    if desc_col:
+                        desc_val = row.get(desc_col)
+                        defaults['description'] = '' if pd.isna(desc_val) else str(desc_val)
+
+                    if active_col:
+                        raw_active = row.get(active_col)
+                        is_active = True
+                        if pd.isna(raw_active):
+                            is_active = True
+                        elif isinstance(raw_active, str):
+                            is_active = raw_active.strip().lower() in ('oui', 'yes', 'true', '1')
+                        else:
+                            try:
+                                is_active = bool(int(raw_active))
+                            except Exception:
+                                is_active = bool(raw_active)
+
+                        defaults['is_active'] = is_active
+
+                    if user:
+                        # assign by id to avoid assigning AnonymousUser proxy objects
+                        defaults['updated_by_id'] = user.pk
+
+                    category, created = ProductCategory.objects.update_or_create(
+                        name=name,
+                        defaults=defaults
+                    )
+
+                    if created:
+                        if user and getattr(user, 'pk', None):
+                            try:
+                                category.created_by_id = user.pk
+                                category.save()
+                            except Exception:
+                                # ignore assignment errors and keep created object
+                                pass
+                        created_count += 1
+                    else:
+                        updated_count += 1
+
+                except Exception as e:
+                    errors.append(f"Ligne {index + 2}: {str(e)}")
+
+            return Response({
+                'message': 'Import catégories terminé',
+                'created': created_count,
+                'updated': updated_count,
+                'errors': errors
+            })
+
+        except Exception as e:
+            return Response({'error': f"Erreur lors de l'import: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+

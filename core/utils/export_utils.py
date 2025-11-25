@@ -170,3 +170,19 @@ class ImportValidator:
         except model.DoesNotExist:
             return None
 
+    @staticmethod
+    def horizontal_line(width=500, color="#000000"):
+        from reportlab.platypus import Flowable
+
+        class HorizontalLine(Flowable):
+            def __init__(self, width, color):
+                super().__init__()
+                self.width = width
+                self.color = colors.HexColor(color)
+
+            def draw(self):
+                self.canv.setStrokeColor(self.color)
+                self.canv.setLineWidth(1)
+                self.canv.line(0, 0, self.width, 0)
+
+        return HorizontalLine(width, color)

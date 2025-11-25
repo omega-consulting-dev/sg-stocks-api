@@ -21,6 +21,16 @@ class ProductCategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['created_at', 'updated_at']
 
 
+    def validate(self, attrs):
+        name = attrs.get('name', '').strip().lower()
+        parent = attrs.get('parent', None)
+        qs = ProductCategory.objects.filter(name__iexact=name, parent=parent)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError({'name': 'Une catégorie avec ce nom existe déjà pour ce parent.'})
+        return attrs
+
 class ProductImageSerializer(serializers.ModelSerializer):
     """Serializer for product images."""
     
