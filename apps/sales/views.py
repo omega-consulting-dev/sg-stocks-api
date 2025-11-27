@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, Count
@@ -25,7 +26,8 @@ class SaleViewSet(viewsets.ModelViewSet):
     """ViewSet for Sale model."""
     
     queryset = Sale.objects.select_related('customer', 'store').prefetch_related('lines')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'sales'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['customer', 'store', 'status', 'payment_status', 'sale_date']
     search_fields = ['sale_number', 'customer__username']
@@ -193,7 +195,8 @@ class QuoteViewSet(viewsets.ModelViewSet):
     
     queryset = Quote.objects.select_related('customer', 'store').prefetch_related('lines')
     serializer_class = QuoteSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'sales'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['customer', 'store', 'status']
     search_fields = ['quote_number', 'customer__username']

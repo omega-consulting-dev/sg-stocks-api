@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from apps.loans.models import Loan, LoanPayment, LoanSchedule
 from apps.loans.serializers import (
@@ -11,6 +12,8 @@ from apps.loans.serializers import (
 
 class LoanViewSet(viewsets.ModelViewSet):
     queryset = Loan.objects.all()
+    permission_classes = [IsAuthenticated]
+    module_name = 'loans'
     filterset_fields = ['loan_type', 'status']
     
     def get_serializer_class(self):
@@ -70,3 +73,5 @@ class LoanPaymentViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = LoanPayment.objects.select_related('loan')
     serializer_class = LoanPaymentSerializer
     filterset_fields = ['loan']
+    permission_classes = [IsAuthenticated]
+    module_name = 'loans'

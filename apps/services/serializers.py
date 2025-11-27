@@ -10,6 +10,7 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
     """Serializer for service categories."""
     
     services_count = serializers.SerializerMethodField()
+ 
     
     class Meta:
         model = ServiceCategory
@@ -18,6 +19,14 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
             'services_count', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
+    
+    def validate_name(self, value):
+        """Validate unique category name."""
+        instance = self.instance
+        if ServiceCategory.objects.exclude(pk=instance.pk if instance else None).filter(name=value).exists():
+            raise serializers.ValidationError("Une catégorie de service avec ce nom existe déjà.")
+        return value
+ 
     
     def get_services_count(self, obj):
         return obj.services.filter(is_active=True).count()

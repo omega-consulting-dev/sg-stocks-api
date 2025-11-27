@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from apps.accounts.permissions import HasModulePermission
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -66,12 +67,13 @@ class ProductViewSet(viewsets.ModelViewSet):
     """
     
     queryset = Product.objects.select_related('category').prefetch_related('images')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProductFilter
     search_fields = ['name', 'reference', 'barcode', 'description']
     ordering_fields = ['name', 'reference', 'selling_price', 'created_at']
     ordering = ['-created_at']
+    module_name = 'products'
     
     def get_serializer_class(self):
         """Return appropriate serializer based on action."""
@@ -364,7 +366,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 class ProductCategoryViewSet(viewsets.ModelViewSet):
     queryset = ProductCategory.objects.filter(is_active=True)
     serializer_class = ProductCategorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'products'
     authentication_classes = [JWTAuthentication]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'description']
@@ -472,7 +475,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         tags=["Categories"],
         request={'multipart/form-data': {'type': 'object', 'properties': {'file': {'type': 'string', 'format': 'binary'}}}}
     )
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, HasModulePermission])
     def import_excel(self, request):
         """Import product categories from an Excel file.
 

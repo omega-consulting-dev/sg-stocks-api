@@ -129,7 +129,7 @@ WSGI_APPLICATION = 'myproject.wsgi.application'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-AUTH_USER_MODEL = 'main.User'
+AUTH_USER_MODEL = 'accounts.User'
  
 # Application definition
 SHARED_APPS = (

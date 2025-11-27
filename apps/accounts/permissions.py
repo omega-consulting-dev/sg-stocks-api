@@ -19,7 +19,7 @@ class IsAdminOrManager(permissions.BasePermission):
             return True
         
         # Manager ou role avec can_manage_users
-        if request.user.role:
+        if hasattr(request.user, 'role') and request.user.role:
             if request.user.role.name in ['manager', 'super_admin']:
                 return True
             if request.user.role.can_manage_users:
@@ -43,7 +43,7 @@ class IsOwnerOrAdmin(permissions.BasePermission):
             return True
         
         # Les managers peuvent accéder à tous les profils
-        if request.user.role and request.user.role.name in ['manager', 'super_admin']:
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.name in ['manager', 'super_admin']:
             return True
         
         return False
@@ -63,7 +63,7 @@ class CanManageUsers(permissions.BasePermission):
             return True
         
         # Vérifier la permission can_manage_users
-        if request.user.role and request.user.role.can_manage_users:
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.can_manage_users:
             return True
         
         return False
@@ -83,7 +83,7 @@ class CanAccessStore(permissions.BasePermission):
             return True
         
         # Manager a accès à tous les magasins
-        if request.user.role and request.user.role.access_scope == 'all':
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.access_scope == 'all':
             return True
         
         return True  # La vérification détaillée se fait au niveau de l'objet
@@ -94,11 +94,14 @@ class CanAccessStore(permissions.BasePermission):
             return True
         
         # Manager a accès à tous les magasins
-        if request.user.role and request.user.role.access_scope == 'all':
+        if hasattr(request.user, 'role') and request.user.role and request.user.role.access_scope == 'all':
             return True
         
         # Vérifier si l'utilisateur a accès au magasin
-        return request.user.can_access_store(obj)
+        if hasattr(request.user, 'can_access_store'):
+            return request.user.can_access_store(obj)
+        
+        return False
 
 
 class HasModulePermission(permissions.BasePermission):
@@ -136,4 +139,7 @@ class HasModulePermission(permissions.BasePermission):
         permission_name = f'can_manage_{module_name}'
         
         # Vérifier la permission via le rôle
-        return request.user.has_permission(permission_name)
+        if hasattr(request.user, 'has_permission'):
+            return request.user.has_permission(permission_name)
+        
+        return False

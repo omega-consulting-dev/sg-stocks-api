@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, Count
@@ -24,7 +25,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     """ViewSet for Invoice model."""
     
     queryset = Invoice.objects.select_related('customer', 'sale').prefetch_related('lines', 'payments')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'invoicing'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['customer', 'status', 'invoice_date']
     search_fields = ['invoice_number', 'customer__username']
@@ -152,7 +154,8 @@ class InvoicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
     
     queryset = InvoicePayment.objects.select_related('invoice', 'created_by')
     serializer_class = InvoicePaymentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'invoicing'
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['invoice', 'payment_method', 'payment_date']
     ordering_fields = ['payment_date', 'amount']

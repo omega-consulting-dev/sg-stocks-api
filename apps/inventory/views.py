@@ -6,6 +6,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, F, Q
@@ -36,7 +37,8 @@ class StoreViewSet(viewsets.ModelViewSet):
     
     queryset = Store.objects.select_related('manager')
     serializer_class = StoreSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['store_type', 'is_active']
     search_fields = ['name', 'code', 'city']
@@ -75,7 +77,8 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     
     queryset = Stock.objects.select_related('product', 'store')
     serializer_class = StockSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['product', 'store']
     search_fields = ['product__name', 'product__reference']
@@ -109,7 +112,8 @@ class StockMovementViewSet(viewsets.ModelViewSet):
         'product', 'store', 'destination_store', 'created_by'
     )
     serializer_class = StockMovementSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['product', 'store', 'movement_type']
     search_fields = ['product__name', 'reference']
@@ -148,7 +152,8 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     queryset = StockTransfer.objects.select_related(
         'source_store', 'destination_store'
     ).prefetch_related('lines__product')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['source_store', 'destination_store', 'status']
     search_fields = ['transfer_number']
@@ -241,7 +246,8 @@ class InventoryViewSet(viewsets.ModelViewSet):
     """ViewSet for Inventory model."""
     
     queryset = Inventory.objects.select_related('store').prefetch_related('lines__product')
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['store', 'status']
     search_fields = ['inventory_number']

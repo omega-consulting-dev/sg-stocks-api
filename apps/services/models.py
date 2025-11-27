@@ -11,7 +11,7 @@ class ServiceCategory(ActiveModel, AuditModel):
     """
     Service category model.
     """
-    name = models.CharField(max_length=100, verbose_name="Désignation")
+    name = models.CharField(max_length=100, unique=True, verbose_name="Désignation")
     description = models.TextField(blank=True, verbose_name="Description")
     
     class Meta:
