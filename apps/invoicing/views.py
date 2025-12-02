@@ -8,6 +8,11 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, Count
 from django.utils import timezone
 from django.http import HttpResponse
+import io
+import csv
+from core.utils.export_utils import ExcelExporter, PDFExporter
+from reportlab.platypus import Paragraph, Spacer
+from reportlab.lib.units import inch
 
 from apps.invoicing.models import Invoice, InvoicePayment
 from apps.invoicing.serializers import (
@@ -122,6 +127,161 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         serializer = InvoicePaymentSerializer(payment)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @extend_schema(summary="Exporter les factures en Excel", tags=["Invoicing"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export invoices to Excel. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        invoices = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        wb, ws = ExcelExporter.create_workbook("Factures")
+        
+        columns = [
+            'Numéro', 'Client', 'Date', 'Échéance', 'Montant Total', 
+            'Montant Payé', 'Solde', 'Statut', 'Créé par'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, invoice in enumerate(invoices, 2):
+            ws.cell(row=row_num, column=1, value=invoice.invoice_number)
+            ws.cell(row=row_num, column=2, value=invoice.customer.get_display_name() if invoice.customer else '')
+            ws.cell(row=row_num, column=3, value=invoice.invoice_date.strftime('%Y-%m-%d'))
+            ws.cell(row=row_num, column=4, value=invoice.due_date.strftime('%Y-%m-%d'))
+            ws.cell(row=row_num, column=5, value=float(invoice.total_amount))
+            ws.cell(row=row_num, column=6, value=float(invoice.paid_amount))
+            ws.cell(row=row_num, column=7, value=float(invoice.balance_due))
+            ws.cell(row=row_num, column=8, value=invoice.get_status_display())
+            ws.cell(row=row_num, column=9, value=invoice.created_by.username if invoice.created_by else '')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"factures_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+    
+    @extend_schema(summary="Exporter les factures en PDF", tags=["Invoicing"])
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export invoices to PDF. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        invoices = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        invoices = invoices[:100]
+        
+        buffer = io.BytesIO()
+        doc = PDFExporter.create_document(buffer)
+        styles = PDFExporter.get_styles()
+        story = []
+        
+        story.append(Paragraph("Factures", styles['CustomTitle']))
+        story.append(Spacer(1, 0.5*inch))
+        
+        date_str = timezone.now().strftime('%d/%m/%Y %H:%M')
+        story.append(Paragraph(f"Généré le: {date_str}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        data = [['Numéro', 'Client', 'Date', 'Montant Total', 'Statut']]
+        for invoice in invoices:
+            data.append([
+                invoice.invoice_number,
+                invoice.customer.get_display_name() if invoice.customer else '',
+                invoice.invoice_date.strftime('%d/%m/%Y'),
+                f"{float(invoice.total_amount):,.0f}",
+                invoice.get_status_display()
+            ])
+        
+        table = PDFExporter.create_table(data)
+        story.append(table)
+        
+        doc.build(story)
+        
+        filename = f"factures_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return PDFExporter.generate_response(buffer, filename)
+    
+    @extend_schema(summary="Exporter les factures en CSV", tags=["Invoicing"])
+    @action(detail=False, methods=['get'])
+    def export_csv(self, request):
+        """Export invoices to CSV. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        invoices = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                invoices = invoices.filter(invoice_date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="factures.csv"'
+        
+        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        
+        writer.writerow(['Numéro', 'Client', 'Date', 'Échéance', 'Montant Total', 'Montant Payé', 'Solde', 'Statut'])
+        
+        for invoice in invoices:
+            writer.writerow([
+                invoice.invoice_number,
+                invoice.customer.get_display_name() if invoice.customer else '',
+                invoice.invoice_date.strftime('%Y-%m-%d'),
+                invoice.due_date.strftime('%Y-%m-%d'),
+                f"{float(invoice.total_amount):,.2f}",
+                f"{float(invoice.paid_amount):,.2f}",
+                f"{float(invoice.balance_due):,.2f}",
+                invoice.get_status_display()
+            ])
+        
+        return response
     
     @extend_schema(summary="Statistiques des factures", tags=["Invoicing"])
     @action(detail=False, methods=['get'])

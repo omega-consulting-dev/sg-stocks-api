@@ -12,7 +12,12 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, F, Q
 from django.utils import timezone
 
-from core.utils.export_utils import ExcelExporter
+from core.utils.export_utils import ExcelExporter, PDFExporter
+from reportlab.platypus import Paragraph, Spacer
+from reportlab.lib.units import inch
+import io
+import csv
+from django.http import HttpResponse
 
 from apps.inventory.models import (
     Store, Stock, StockMovement, StockTransfer, 
@@ -125,9 +130,165 @@ class StockMovementViewSet(viewsets.ModelViewSet):
         movement = serializer.save(created_by=self.request.user)
         self._update_stock(movement)
     
+    @extend_schema(summary="Exporter les mouvements en Excel", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export stock movements to Excel. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        movements = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        wb, ws = ExcelExporter.create_workbook("Mouvements de Stock")
+        
+        columns = [
+            'Date', 'Référence', 'Produit', 'Magasin', 'Type', 
+            'Quantité', 'Destination', 'Créé par', 'Notes'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, movement in enumerate(movements, 2):
+            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%Y-%m-%d %H:%M'))
+            ws.cell(row=row_num, column=2, value=movement.reference)
+            ws.cell(row=row_num, column=3, value=movement.product.name)
+            ws.cell(row=row_num, column=4, value=movement.store.name)
+            ws.cell(row=row_num, column=5, value=movement.get_movement_type_display())
+            ws.cell(row=row_num, column=6, value=float(movement.quantity))
+            ws.cell(row=row_num, column=7, value=movement.destination_store.name if movement.destination_store else '')
+            ws.cell(row=row_num, column=8, value=movement.created_by.username if movement.created_by else '')
+            ws.cell(row=row_num, column=9, value=movement.notes or '')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+    
+    @extend_schema(summary="Exporter les mouvements en PDF", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export stock movements to PDF. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        movements = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        movements = movements[:100]
+        
+        buffer = io.BytesIO()
+        doc = PDFExporter.create_document(buffer)
+        styles = PDFExporter.get_styles()
+        story = []
+        
+        story.append(Paragraph("Mouvements de Stock", styles['CustomTitle']))
+        story.append(Spacer(1, 0.5*inch))
+        
+        date_str = timezone.now().strftime('%d/%m/%Y %H:%M')
+        story.append(Paragraph(f"Généré le: {date_str}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        data = [['Date', 'Référence', 'Produit', 'Magasin', 'Type', 'Quantité']]
+        for movement in movements:
+            data.append([
+                movement.created_at.strftime('%d/%m/%Y'),
+                movement.reference,
+                movement.product.name[:30],
+                movement.store.name,
+                movement.get_movement_type_display(),
+                str(movement.quantity)
+            ])
+        
+        table = PDFExporter.create_table(data)
+        story.append(table)
+        
+        doc.build(story)
+        
+        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        return PDFExporter.generate_response(buffer, filename)
+    
+    @extend_schema(summary="Exporter les mouvements en CSV", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_csv(self, request):
+        """Export stock movements to CSV. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+        movements = self.filter_queryset(self.get_queryset())
+        
+        # Apply date filtering if provided
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="mouvements_stock.csv"'
+        
+        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        
+        writer.writerow(['Date', 'Référence', 'Produit', 'Magasin', 'Type', 'Quantité', 'Destination', 'Notes'])
+        
+        for movement in movements:
+            writer.writerow([
+                movement.created_at.strftime('%Y-%m-%d %H:%M'),
+                movement.reference,
+                movement.product.name,
+                movement.store.name,
+                movement.get_movement_type_display(),
+                str(movement.quantity),
+                movement.destination_store.name if movement.destination_store else '',
+                movement.notes or ''
+            ])
+        
+        return response
+    
     def _update_stock(self, movement):
         """Update stock based on movement type."""
-        stock, created = Stock.objects.get_or_create(
+        stock, _ = Stock.objects.get_or_create(
             product=movement.product,
             store=movement.store,
             defaults={'quantity': 0, 'reserved_quantity': 0}
@@ -220,7 +381,7 @@ class StockTransferViewSet(viewsets.ModelViewSet):
             line.save()
             
             # Increase stock in destination
-            stock, created = Stock.objects.get_or_create(
+            stock, _ = Stock.objects.get_or_create(
                 product=line.product,
                 store=transfer.destination_store,
                 defaults={'quantity': 0, 'reserved_quantity': 0}

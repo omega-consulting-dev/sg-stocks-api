@@ -103,14 +103,39 @@ class TenantProvisioningSerializer(serializers.Serializer):
         # Migrations automatiques du schema
         call_command('migrate_schemas', schema_name=schema_name, verbosity=0)
 
-        # Création du rôle Manager dans le schéma du tenant
+        # Création des rôles par défaut dans le schéma du tenant
         from django_tenants.utils import connection
         connection.set_tenant(company)
-        manager_role, _ = Role.objects.get_or_create(
+
+        # Super admin role (doit exister et avoir tous les droits)
+        super_role_defaults = {
+            'display_name': 'Super Administrateur',
+            'description': 'Accès total à toutes les fonctionnalités',
+            'can_manage_users': True,
+            'can_manage_products': True,
+            'can_manage_inventory': True,
+            'can_manage_sales': True,
+            'can_manage_customers': True,
+            'can_manage_suppliers': True,
+            'can_manage_cashbox': True,
+            'can_manage_loans': True,
+            'can_manage_expenses': True,
+            'can_view_analytics': True,
+            'can_export_data': True,
+            'access_scope': 'all',
+        }
+
+        super_admin_role, _ = Role.objects.get_or_create(
+            name='super_admin',
+            defaults=super_role_defaults
+        )
+
+        # Manager role (fallback / common role)
+        _, _ = Role.objects.get_or_create(
             name='manager',
             defaults={
                 'display_name': 'Gérant/Directeur',
-                'description': 'Accès complet à toutes les fonctionnalités',
+                'description': 'Accès complet aux fonctionnalités métier',
                 'can_manage_users': True,
                 'can_manage_products': True,
                 'can_manage_inventory': True,
@@ -125,7 +150,7 @@ class TenantProvisioningSerializer(serializers.Serializer):
             }
         )
 
-        # Création de l’utilisateur administrateur
+        # Création de l’utilisateur administrateur (superuser du tenant)
         admin_user = User.objects.create_user(
             username=validated_data.get("admin_username"),
             email=validated_data.get("admin_email"),
@@ -133,9 +158,9 @@ class TenantProvisioningSerializer(serializers.Serializer):
             first_name=validated_data.get("admin_first_name", ''),
             last_name=validated_data.get("admin_last_name", ''),
             is_staff=True,
-            is_superuser=False,
+            is_superuser=True,
             is_collaborator=True,
-            role=manager_role,
+            role=super_admin_role,
         )
 
         return {
