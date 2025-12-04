@@ -75,6 +75,7 @@ class Stock(AuditModel):
         validators=[MinValueValidator(0)],
         verbose_name="Quantité"
     )
+    
     reserved_quantity = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -132,6 +133,32 @@ class StockMovement(AuditModel):
         decimal_places=2,
         validators=[MinValueValidator(0)],
         verbose_name="Quantité"
+    )
+    supplier = models.ForeignKey(
+    'suppliers.Supplier',
+    on_delete=models.PROTECT,
+    related_name='stock_movements',
+    null=True,
+    blank=True,
+    verbose_name="Fournisseur"
+    )
+
+    # Optional link to a purchase order when movement comes from a PO reception
+    purchase_order = models.ForeignKey(
+        'suppliers.PurchaseOrder',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='stock_movements',
+        verbose_name="Bon de commande"
+    )
+
+    unit_cost = models.DecimalField(
+    max_digits=12,
+    decimal_places=2,
+    null=True,
+    blank=True,
+    verbose_name="Prix d'achat unitaire"
     )
     
     # Reference to source document

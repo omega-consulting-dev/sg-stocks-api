@@ -335,8 +335,24 @@ class User(AbstractUser, TimeStampedModel):
         
         from apps.invoicing.models import Invoice
         from django.db.models import Sum
+        from django.apps import apps
         
-        invoices = Invoice.objects.filter(customer__user=self)
+        # Determine whether Invoice.customer points to User or to a Customer model.
+        # If it points to User (current implementation), filter by customer=self.
+        # If it points to Customer, filter by customer__user=self.
+        try:
+            customer_field = Invoice._meta.get_field('customer')
+            related_model = customer_field.remote_field.model
+            if isinstance(related_model, str):
+                related_model = apps.get_model(related_model)
+        except Exception:
+            related_model = None
+
+        if related_model is not None and related_model == self.__class__:
+            invoices = Invoice.objects.filter(customer=self)
+        else:
+            # Assume Invoice.customer references a Customer model with a `user` relation
+            invoices = Invoice.objects.filter(customer__user=self)
         total_invoiced = invoices.aggregate(
             total=Sum('total_amount')
         )['total'] or 0

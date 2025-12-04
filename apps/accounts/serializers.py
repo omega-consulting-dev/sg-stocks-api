@@ -7,8 +7,8 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from apps.accounts.models import User, Role, Permission, UserSession, UserActivity
-
-
+from django.db.models import Sum
+from apps.suppliers.models import Supplier, SupplierPayment
 ### auth   
 class LoginSerializer(TokenObtainPairSerializer):
     username_field = 'email'
@@ -148,11 +148,15 @@ class UserDetailSerializer(serializers.ModelSerializer):
             return float(obj.get_customer_balance())
         return None
     
-    def get_supplier_balance(self, obj):
-        if obj.is_supplier:
-            return float(obj.get_supplier_balance())
-        return None
 
+    
+    def get_supplier_balance(self, obj):
+        if not obj.is_supplier or not hasattr(obj, 'supplier'):
+            return 0
+
+        transactions = SupplierPayment.objects.filter(supplier=obj.supplier)
+        total = transactions.aggregate(total=Sum('amount'))['total'] or 0
+        return total
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for user creation."""

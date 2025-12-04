@@ -3,6 +3,7 @@ Supplier management models.
 """
 
 from django.db import models
+from django.conf import settings
 from django.core.validators import MinValueValidator
 from core.models import TimeStampedModel, ActiveModel, AuditModel
 
@@ -12,6 +13,16 @@ class Supplier(ActiveModel, AuditModel):
     Supplier/Vendor model.
     """
     # Basic information
+    # Link to auth user (optional)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='supplier',
+        verbose_name="Utilisateur lié"
+    )
+
     name = models.CharField(max_length=200, verbose_name="Raison sociale")
     supplier_code = models.CharField(
         max_length=50,
@@ -122,6 +133,8 @@ class PurchaseOrder(AuditModel):
     order_date = models.DateField(verbose_name="Date de commande")
     expected_delivery = models.DateField(null=True, blank=True, verbose_name="Livraison prévue")
     actual_delivery = models.DateField(null=True, blank=True, verbose_name="Livraison réelle")
+    # Date d'échéance de paiement pour cette commande
+    due_date = models.DateField(null=True, blank=True, verbose_name="Date d'échéance")
     
     # Status
     status = models.CharField(

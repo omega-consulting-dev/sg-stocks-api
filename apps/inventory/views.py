@@ -5,19 +5,20 @@ Inventory views for API.
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, F, Q
 from django.utils import timezone
+from django.http import HttpResponse
+import django_filters
 
 from core.utils.export_utils import ExcelExporter, PDFExporter
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
 import io
-import csv
-from django.http import HttpResponse
 
 from apps.inventory.models import (
     Store, Stock, StockMovement, StockTransfer, 
@@ -105,6 +106,16 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data)
 
 
+class StockMovementFilterSet(django_filters.FilterSet):
+    """Custom FilterSet for StockMovement with date range filters."""
+    date_from = django_filters.DateFilter(field_name='created_at', lookup_expr='date__gte')
+    date_to = django_filters.DateFilter(field_name='created_at', lookup_expr='date__lte')
+    
+    class Meta:
+        model = StockMovement
+        fields = ['product', 'store', 'movement_type', 'supplier', 'date_from', 'date_to']
+
+
 @extend_schema_view(
     list=extend_schema(summary="Liste des mouvements", tags=["Inventory"]),
     retrieve=extend_schema(summary="Détail d'un mouvement", tags=["Inventory"]),
@@ -114,178 +125,23 @@ class StockMovementViewSet(viewsets.ModelViewSet):
     """ViewSet for StockMovement model."""
     
     queryset = StockMovement.objects.select_related(
-        'product', 'store', 'destination_store', 'created_by'
+        'product', 'store', 'destination_store','supplier', 'created_by', 'purchase_order'
     )
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['product', 'store', 'movement_type']
-    search_fields = ['product__name', 'reference']
+    filterset_class = StockMovementFilterSet
+    search_fields = ['product__name', 'reference', 'supplier__name', 'supplier__supplier_code']
     ordering_fields = ['created_at']
     ordering = ['-created_at']
     http_method_names = ['get', 'post', 'head', 'options']
+
     
     def perform_create(self, serializer):
         movement = serializer.save(created_by=self.request.user)
         self._update_stock(movement)
-    
-    @extend_schema(summary="Exporter les mouvements en Excel", tags=["Inventory"])
-    @action(detail=False, methods=['get'])
-    def export_excel(self, request):
-        """Export stock movements to Excel. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
-        movements = self.filter_queryset(self.get_queryset())
-        
-        # Apply date filtering if provided
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        
-        if date_from:
-            try:
-                from datetime import datetime
-                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__gte=date_from_obj)
-            except ValueError:
-                pass
-        
-        if date_to:
-            try:
-                from datetime import datetime
-                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__lte=date_to_obj)
-            except ValueError:
-                pass
-        
-        wb, ws = ExcelExporter.create_workbook("Mouvements de Stock")
-        
-        columns = [
-            'Date', 'Référence', 'Produit', 'Magasin', 'Type', 
-            'Quantité', 'Destination', 'Créé par', 'Notes'
-        ]
-        ExcelExporter.style_header(ws, columns)
-        
-        for row_num, movement in enumerate(movements, 2):
-            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%Y-%m-%d %H:%M'))
-            ws.cell(row=row_num, column=2, value=movement.reference)
-            ws.cell(row=row_num, column=3, value=movement.product.name)
-            ws.cell(row=row_num, column=4, value=movement.store.name)
-            ws.cell(row=row_num, column=5, value=movement.get_movement_type_display())
-            ws.cell(row=row_num, column=6, value=float(movement.quantity))
-            ws.cell(row=row_num, column=7, value=movement.destination_store.name if movement.destination_store else '')
-            ws.cell(row=row_num, column=8, value=movement.created_by.username if movement.created_by else '')
-            ws.cell(row=row_num, column=9, value=movement.notes or '')
-        
-        ExcelExporter.auto_adjust_columns(ws)
-        
-        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        return ExcelExporter.generate_response(wb, filename)
-    
-    @extend_schema(summary="Exporter les mouvements en PDF", tags=["Inventory"])
-    @action(detail=False, methods=['get'])
-    def export_pdf(self, request):
-        """Export stock movements to PDF. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
-        movements = self.filter_queryset(self.get_queryset())
-        
-        # Apply date filtering if provided
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        
-        if date_from:
-            try:
-                from datetime import datetime
-                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__gte=date_from_obj)
-            except ValueError:
-                pass
-        
-        if date_to:
-            try:
-                from datetime import datetime
-                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__lte=date_to_obj)
-            except ValueError:
-                pass
-        
-        movements = movements[:100]
-        
-        buffer = io.BytesIO()
-        doc = PDFExporter.create_document(buffer)
-        styles = PDFExporter.get_styles()
-        story = []
-        
-        story.append(Paragraph("Mouvements de Stock", styles['CustomTitle']))
-        story.append(Spacer(1, 0.5*inch))
-        
-        date_str = timezone.now().strftime('%d/%m/%Y %H:%M')
-        story.append(Paragraph(f"Généré le: {date_str}", styles['Normal']))
-        story.append(Spacer(1, 0.3*inch))
-        
-        data = [['Date', 'Référence', 'Produit', 'Magasin', 'Type', 'Quantité']]
-        for movement in movements:
-            data.append([
-                movement.created_at.strftime('%d/%m/%Y'),
-                movement.reference,
-                movement.product.name[:30],
-                movement.store.name,
-                movement.get_movement_type_display(),
-                str(movement.quantity)
-            ])
-        
-        table = PDFExporter.create_table(data)
-        story.append(table)
-        
-        doc.build(story)
-        
-        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        return PDFExporter.generate_response(buffer, filename)
-    
-    @extend_schema(summary="Exporter les mouvements en CSV", tags=["Inventory"])
-    @action(detail=False, methods=['get'])
-    def export_csv(self, request):
-        """Export stock movements to CSV. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
-        movements = self.filter_queryset(self.get_queryset())
-        
-        # Apply date filtering if provided
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        
-        if date_from:
-            try:
-                from datetime import datetime
-                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__gte=date_from_obj)
-            except ValueError:
-                pass
-        
-        if date_to:
-            try:
-                from datetime import datetime
-                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__lte=date_to_obj)
-            except ValueError:
-                pass
-        
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="mouvements_stock.csv"'
-        
-        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        
-        writer.writerow(['Date', 'Référence', 'Produit', 'Magasin', 'Type', 'Quantité', 'Destination', 'Notes'])
-        
-        for movement in movements:
-            writer.writerow([
-                movement.created_at.strftime('%Y-%m-%d %H:%M'),
-                movement.reference,
-                movement.product.name,
-                movement.store.name,
-                movement.get_movement_type_display(),
-                str(movement.quantity),
-                movement.destination_store.name if movement.destination_store else '',
-                movement.notes or ''
-            ])
-        
-        return response
-    
+     
     def _update_stock(self, movement):
         """Update stock based on movement type."""
         stock, _ = Stock.objects.get_or_create(
@@ -300,6 +156,230 @@ class StockMovementViewSet(viewsets.ModelViewSet):
             stock.quantity -= movement.quantity
         
         stock.save()
+
+    @extend_schema(summary="Exporter les mouvements en Excel", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export stock movements to Excel with filtering.
+        Supports all filters from the list endpoint:
+        - movement_type: 'in', 'out', 'transfer'
+        - date_from: YYYY-MM-DD (applies to created_at)
+        - date_to: YYYY-MM-DD (applies to created_at)
+        - supplier: supplier id
+        - product: product id
+        - store: store id
+        - search: search in product name, reference, supplier name, supplier code
+        """
+        # Use filter_queryset to apply all configured filters (DjangoFilterBackend, SearchFilter, etc.)
+        movements = self.filter_queryset(self.get_queryset())
+        
+        from openpyxl.styles import Font, Alignment, PatternFill
+        from openpyxl.utils import get_column_letter
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Mouvements"
+        
+        columns = [
+            'Date', 'Référence', 'Produit', 'Magasin', 'Fournisseur', 'Type', 
+            'Quantité', 'Coût Unitaire', 'Destination', 'PO Number', 'Créé par', 'Notes'
+        ]
+        
+        # Style header
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        for col_num, col_title in enumerate(columns, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.value = col_title
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Add data
+        for row_num, movement in enumerate(movements, 2):
+            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%Y-%m-%d %H:%M'))
+            ws.cell(row=row_num, column=2, value=movement.reference)
+            ws.cell(row=row_num, column=3, value=movement.product.name)
+            ws.cell(row=row_num, column=4, value=movement.store.name)
+            ws.cell(row=row_num, column=5, value=movement.supplier.name if movement.supplier else '')
+            ws.cell(row=row_num, column=6, value=movement.get_movement_type_display())
+            ws.cell(row=row_num, column=7, value=float(movement.quantity))
+            ws.cell(row=row_num, column=8, value=float(movement.unit_cost or 0))
+            ws.cell(row=row_num, column=9, value=movement.destination_store.name if movement.destination_store else '')
+            ws.cell(row=row_num, column=10, value=movement.purchase_order.order_number if movement.purchase_order else '')
+            ws.cell(row=row_num, column=11, value=movement.created_by.username if movement.created_by else '')
+            ws.cell(row=row_num, column=12, value=movement.notes or '')
+        
+        # Auto adjust columns
+        for col_num, col_title in enumerate(columns, 1):
+            ws.column_dimensions[get_column_letter(col_num)].width = 18
+        
+        # Generate response
+        response = HttpResponse(content_type='application/vnd.ms-excel')
+        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        
+        return response
+    
+    @extend_schema(summary="Exporter les mouvements en PDF", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export stock movements to PDF with filtering.
+        Supports all filters from the list endpoint:
+        - movement_type: 'in', 'out', 'transfer'
+        - date_from: YYYY-MM-DD (applies to created_at)
+        - date_to: YYYY-MM-DD (applies to created_at)
+        - supplier: supplier id
+        - product: product id
+        - store: store id
+        - search: search in product name, reference, supplier name, supplier code
+        """
+        # Use filter_queryset to apply all configured filters
+        movements = self.filter_queryset(self.get_queryset())
+        
+        # Get filter parameters
+        movement_type = request.query_params.get('movement_type', '')
+        date_from = request.query_params.get('date_from', '')
+        date_to = request.query_params.get('date_to', '')
+        
+        # Apply date filters if provided
+        if date_from:
+            try:
+                from datetime import datetime
+                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__gte=date_from_obj)
+            except ValueError:
+                pass
+        
+        if date_to:
+            try:
+                from datetime import datetime
+                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
+                movements = movements.filter(created_at__date__lte=date_to_obj)
+            except ValueError:
+                pass
+        
+        # Limit to 100 records for PDF
+        movements = movements[:100]
+        
+        # Import necessary libraries
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from datetime import datetime
+        from django.utils import timezone
+        import io
+        
+        # Create PDF buffer
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=landscape(A4),
+            rightMargin=30,
+            leftMargin=30,
+            topMargin=50,
+            bottomMargin=30
+        )
+        
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Title style
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            textColor=colors.HexColor('#366092'),
+            spaceAfter=20,
+            alignment=1  # Center alignment
+        )
+        
+        # Generate title with type filter if present
+        type_label = f" - {movement_type.upper()}" if movement_type else ""
+        title = Paragraph(f"Mouvements de Stock{type_label}", title_style)
+        elements.append(title)
+        
+        # Date range and generation info
+        date_range = f"Du {date_from} au {date_to}" if date_from and date_to else "Tous les mouvements"
+        date_style = ParagraphStyle(
+            'DateStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.grey,
+            alignment=1
+        )
+        date_text = Paragraph(
+            f"{date_range} - Généré le {timezone.now().strftime('%d/%m/%Y à %H:%M')}", 
+            date_style
+        )
+        elements.append(date_text)
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Table data
+        data = [['Date', 'Référence', 'Produit', 'Fournisseur', 'Type', 'Quantité', 'Coût Unit.', 'Magasin']]
+        
+        for movement in movements:
+            row = [
+                movement.created_at.strftime('%d/%m/%Y'),
+                movement.reference[:15] if movement.reference else '-',
+                movement.product.name[:25],
+                (movement.supplier.name[:15] if movement.supplier else '-'),
+                movement.get_movement_type_display(),
+                str(movement.quantity),
+                f"{movement.unit_cost or 0:.2f}",
+                movement.store.name[:15]
+            ]
+            data.append(row)
+        
+        # Create table
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Header style
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            
+            # Body style
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+            ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(table)
+        
+        # Statistics
+        elements.append(Spacer(1, 0.3*inch))
+        total_qty = sum(m.quantity for m in movements)
+        total_value = sum((m.unit_cost or 0) * m.quantity for m in movements)
+        
+        stats_text = f"<b>Total mouvements:</b> {movements.count()} | <b>Quantité totale:</b> {total_qty} | <b>Valeur totale:</b> {total_value:.2f} FCFA"
+        stats = Paragraph(stats_text, date_style)
+        elements.append(stats)
+        
+        # Build PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Generate response
+        response = HttpResponse(buffer.read(), content_type='application/pdf')
+        filename = f'mouvements_stock_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        return response
+
+    
 
 
 @extend_schema_view(

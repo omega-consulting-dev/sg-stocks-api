@@ -3,6 +3,7 @@ Customer management models.
 """
 
 from django.db import models
+from django.conf import settings
 from core.models import TimeStampedModel, ActiveModel, AuditModel
 
 
@@ -10,6 +11,16 @@ class Customer(ActiveModel, AuditModel):
     """
     Customer model (unified for both individual and business customers).
     """
+    # Link to auth user (optional)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='customer',
+        verbose_name="Utilisateur lié"
+    )
+    
     # Basic information
     name = models.CharField(max_length=200, verbose_name="Nom/Raison sociale")
     customer_code = models.CharField(

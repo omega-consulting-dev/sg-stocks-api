@@ -1,5 +1,11 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from apps.accounts.permissions import HasModulePermission
+from django_filters.rest_framework import DjangoFilterBackend
+from django.contrib.auth import get_user_model
+
 from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from django.utils import timezone
@@ -7,15 +13,23 @@ from django.utils import timezone
 from core.utils.export_utils import ExcelExporter
 import pandas as pd
 
+
 from apps.accounts.models import User
 from apps.accounts.serializers import UserListSerializer, UserDetailSerializer
+
+from apps.customers.models import Customer  
 
 class CustomerViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for customers (read-only).
     Uses User model with is_customer=True
     """
-    permission_classes = []
+    permission_classes = [IsAuthenticated, HasModulePermission]
+    module_name = 'products'
+    authentication_classes = [JWTAuthentication]
+    filter_backends = [DjangoFilterBackend]
+    search_fields = ['customer_code', 'customer_company_name']
+
     
     def get_queryset(self):
         return User.objects.filter(is_customer=True)
@@ -27,7 +41,7 @@ class CustomerViewSet(viewsets.ReadOnlyModelViewSet):
     
     @extend_schema(summary="Exporter les clients en Excel", tags=["Users"])
     @action(detail=False, methods=['get'])
-    def export_customers_excel(self, request):
+    def export_excel(self, request):
         """Export customers to Excel."""
         customers = User.objects.filter(is_customer=True)
         
@@ -56,18 +70,19 @@ class CustomerViewSet(viewsets.ReadOnlyModelViewSet):
 
 
     @extend_schema(summary="Importer des clients depuis Excel", tags=["Users"])
-    @action(detail=False, methods=['post'])
-    def import_customers_excel(self, request):
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    def import_excel(self, request):
         """Import customers from Excel."""
         if 'file' not in request.FILES:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         
         file = request.FILES['file']
-        
+    
         try:
             df = pd.read_excel(file)
             
-            required_columns = ['Nom', 'Email']
+           
+            required_columns = ['Nom', 'Téléphone']
             missing_columns = [col for col in required_columns if col not in df.columns]
             
             if missing_columns:
@@ -77,38 +92,76 @@ class CustomerViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             
             created_count = 0
+            updated_count = 0
             errors = []
-            
+
             for index, row in df.iterrows():
                 try:
-                    username = row['Email'].split('@')[0]
-                    
-                    user, created = User.objects.get_or_create(
-                        email=row['Email'],
-                        defaults={
-                            'username': username,
-                            'first_name': row.get('Prénom', ''),
-                            'last_name': row.get('Nom', ''),
-                            'is_customer': True,
-                            'phone': row.get('Téléphone', ''),
-                            'address': row.get('Adresse', ''),
-                            'city': row.get('Ville', ''),
-                            'customer_credit_limit': row.get('Limite Crédit', 0),
-                            'customer_company_name': row.get('Entreprise', ''),
-                        }
-                    )
-                    
+                    nom = str(row.get('Nom', '')).strip()
+                    phone = str(row.get('Téléphone', '')).strip()
+                    email = str(row.get('Email', '')).strip() if 'Email' in df.columns else ''
+
+                    # Générer un username unique basé sur nom ou fallback
+                    base_username = nom or phone or f"user{index+1}"
+                    username = base_username
+                    counter = 1
+                    while User.objects.filter(username=username).exists():
+                        username = f"{base_username}{counter}"
+                        counter += 1
+
+                    # --- USER ---
+                    defaults = {
+                        'username': username,
+                        'first_name': row.get('Prénom', ''),
+                        'last_name': nom,
+                        'is_customer': True,
+                        'phone': phone,
+                        'address': row.get('Adresse', ''),
+                        'city': row.get('Ville', ''),
+                        'customer_credit_limit': row.get('Limite Crédit', 0),
+                        'customer_company_name': row.get('Entreprise', ''),
+                    }
+
+                    if email:
+                        user, created = User.objects.update_or_create(
+                            email=email,
+                            defaults=defaults
+                        )
+                    else:
+                        user, created = User.objects.update_or_create(
+                            username=username,
+                            defaults=defaults
+                        )
+
                     if created:
-                        user.set_password('password123')  # Default password
+                        user.set_password('password123')  # mot de passe par défaut
                         user.save()
-                        created_count += 1
-                        
+
+                    # --- CUSTOMER ---
+                    customer_defaults = {
+                        'name': nom or username,
+                        'company_name': row.get('Entreprise', ''),
+                        'credit_limit': row.get('Limite Crédit', 0),
+                        'phone': phone,
+                        'address': row.get('Adresse', ''),
+                        'city': row.get('Ville', ''),
+                    }
+
+                    Customer.objects.update_or_create(
+                        user=user,
+                        defaults=customer_defaults
+                    )
+
+                    created_count += 1 if created else 0
+                    updated_count += 0 if created else 1
+
                 except Exception as e:
                     errors.append(f"Ligne {index + 2}: {str(e)}")
             
             return Response({
                 'message': 'Import terminé',
                 'created': created_count,
+                'updated': updated_count,
                 'errors': errors
             })
             

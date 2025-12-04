@@ -5,6 +5,7 @@ from apps.inventory.views import (
     StockTransferViewSet, InventoryViewSet
 )
 
+
 router = DefaultRouter()
 router.register(r'stores', StoreViewSet, basename='store')
 router.register(r'stocks', StockViewSet, basename='stock')

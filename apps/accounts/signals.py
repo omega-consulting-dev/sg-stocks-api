@@ -51,6 +51,40 @@ def user_post_save(sender, instance, created, **kwargs):
             )
         except Exception as e:
             print(f"Error creating user activity: {e}")
+        
+        # If the new user is a supplier, ensure a Supplier record exists
+        try:
+            if getattr(instance, 'is_supplier', False):
+                # import here to avoid circular import at module load
+                from apps.suppliers.models import Supplier
+
+                Supplier.objects.get_or_create(
+                    user=instance,
+                    defaults={
+                        'supplier_code': getattr(instance, 'supplier_code', instance.username),
+                        'name': getattr(instance, 'supplier_company_name', instance.get_display_name()),
+                        'email': instance.email or ''
+                    }
+                )
+        except Exception as e:
+            print(f"Error creating Supplier for user: {e}")
+        
+        # If the new user is a customer, ensure a Customer record exists
+        try:
+            if getattr(instance, 'is_customer', False):
+                # import here to avoid circular import at module load
+                from apps.customers.models import Customer
+
+                Customer.objects.get_or_create(
+                    user=instance,
+                    defaults={
+                        'customer_code': getattr(instance, 'customer_code', instance.username),
+                        'name': getattr(instance, 'customer_company_name', instance.get_display_name()),
+                        'email': instance.email or ''
+                    }
+                )
+        except Exception as e:
+            print(f"Error creating Customer for user: {e}")
 
 
 @receiver(user_logged_in)

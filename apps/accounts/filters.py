@@ -40,21 +40,26 @@ class UserFilter(django_filters.FilterSet):
     supplier_code = django_filters.CharFilter(lookup_expr='icontains')
     supplier_company_name = django_filters.CharFilter(lookup_expr='icontains')
     
-    # Date filters
-    date_joined_after = django_filters.DateFilter(field_name='date_joined', lookup_expr='gte')
-    date_joined_before = django_filters.DateFilter(field_name='date_joined', lookup_expr='lte')
-    hire_date_after = django_filters.DateFilter(field_name='hire_date', lookup_expr='gte')
-    hire_date_before = django_filters.DateFilter(field_name='hire_date', lookup_expr='lte')
-    
     class Meta:
         model = User
-        fields = [
-            'username', 'email', 'first_name', 'last_name',
-            'user_type', 'is_collaborator', 'is_customer', 'is_supplier',
-            'is_active', 'is_active_employee', 'is_staff',
-            'role', 'role_name', 'assigned_store',
-            'customer_code', 'customer_company_name',
-            'supplier_code', 'supplier_company_name',
-            'date_joined_after', 'date_joined_before',
-            'hire_date_after', 'hire_date_before'
-        ]
+        fields = {
+            'username': ['exact', 'icontains'],
+            'email': ['exact', 'icontains'],
+            'first_name': ['exact', 'icontains'],
+            'last_name': ['exact', 'icontains'],
+            'user_type': ['exact'],
+            'is_collaborator': ['exact'],
+            'is_customer': ['exact'],
+            'is_supplier': ['exact'],
+            'is_active': ['exact'],
+            'is_active_employee': ['exact'],
+            'is_staff': ['exact'],
+            'role': ['exact'],
+            'assigned_stores': ['exact'],
+            'customer_code': ['exact', 'icontains'],
+            'customer_company_name': ['exact', 'icontains'],
+            'supplier_code': ['exact', 'icontains'],
+            'supplier_company_name': ['exact', 'icontains'],
+            'date_joined': ['gte', 'lte'],
+            'hire_date': ['gte', 'lte'],
+        }
