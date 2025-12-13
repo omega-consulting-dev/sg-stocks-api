@@ -1,5 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from core.models import TimeStampedModel, AuditModel
 
 
@@ -16,10 +18,9 @@ class Invoice(AuditModel):
     
     invoice_number = models.CharField(max_length=50, unique=True, verbose_name="Numéro de facture")
     customer = models.ForeignKey(
-        'accounts.User',
+        'customers.Customer',
         on_delete=models.PROTECT,
         related_name='invoices',
-        limit_choices_to={'is_customer': True},
         verbose_name="Client"
     )
     sale = models.OneToOneField(
@@ -29,6 +30,12 @@ class Invoice(AuditModel):
         blank=True,
         related_name='invoice',
         verbose_name="Vente"
+    )
+    store = models.ForeignKey(
+        'inventory.Store',
+        on_delete=models.PROTECT,
+        related_name='invoices',
+        verbose_name="Point de vente"
     )
     
     # Dates
@@ -97,7 +104,7 @@ class Invoice(AuditModel):
         ordering = ['-invoice_date']
     
     def __str__(self):
-        return f"{self.invoice_number} - {self.customer.get_display_name()}"
+        return f"{self.invoice_number} - {self.customer.name}"
     
     @property
     def balance_due(self):
@@ -117,6 +124,11 @@ class Invoice(AuditModel):
             self.status not in ['paid', 'cancelled'] and
             self.due_date < timezone.now().date()
         )
+    
+    @property
+    def total_items(self):
+        """Calculate total quantity of items."""
+        return sum(line.quantity for line in self.lines.all())
     
     def send_by_email(self):
         """Send invoice by email to customer."""
@@ -142,6 +154,22 @@ class InvoiceLine(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name='lines',
         verbose_name="Facture"
+    )
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='invoice_lines',
+        verbose_name="Produit"
+    )
+    service = models.ForeignKey(
+        'services.Service',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='invoice_lines',
+        verbose_name="Service"
     )
     description = models.CharField(max_length=200, verbose_name="Description")
     quantity = models.DecimalField(
@@ -241,6 +269,101 @@ class InvoicePayment(AuditModel):
     
     class Meta:
         verbose_name = "Paiement de facture"
+        verbose_name_plural = "Paiements de facture"
+        ordering = ['-payment_date']
+    
+    def __str__(self):
+        return f"{self.payment_number} - {self.amount}"
+    
+    def save(self, *args, **kwargs):
+        """Generate payment number if not provided."""
+        if not self.payment_number:
+            from django.utils import timezone
+            # Generate payment number: PAY-YYYYMMDD-XXXX
+            today = timezone.now().date()
+            date_str = today.strftime('%Y%m%d')
+            
+            # Count payments created today
+            today_payments = InvoicePayment.objects.filter(
+                payment_number__startswith=f'PAY-{date_str}'
+            ).count()
+            
+            self.payment_number = f'PAY-{date_str}-{today_payments + 1:04d}'
+        
+        super().save(*args, **kwargs)
+
+
+# Fonction pour créer automatiquement les mouvements de stock
+# Appelée manuellement dans le serializer après la création des lignes
+def create_stock_movements_from_invoice(sender, instance, created, **kwargs):
+    """
+    Créer automatiquement les mouvements de stock quand une facture est créée.
+    - Caissier crée facture → mouvement de sortie automatique
+    - Sécurise les données : vérifie stock disponible, enregistre traçabilité complète
+    """
+    # Éviter les boucles infinies et traiter uniquement les factures confirmées
+    if kwargs.get('raw', False):
+        return
+    
+    # Créer mouvements dès la création de la facture (pas uniquement quand envoyée/payée)
+    # Car dans le workflow actuel, les factures sont créées directement comme des ventes
+    if not created:
+        return  # Uniquement à la création, pas aux mises à jour
+    
+    # Vérifier si on a déjà créé les mouvements pour cette facture
+    from apps.inventory.models import StockMovement, Stock
+    
+    existing_movements = StockMovement.objects.filter(
+        reference=f"FACT-{instance.invoice_number}"
+    ).exists()
+    
+    if existing_movements:
+        return  # Mouvements déjà créés
+    
+    # Créer un mouvement pour chaque ligne de facture qui a un produit
+    for line in instance.lines.all():
+        # Vérifier si la ligne a une référence à un produit
+        # (les lignes peuvent être des produits ou des services)
+        if hasattr(line, 'product') and line.product:
+            # Vérifier le stock disponible AVANT de créer le mouvement
+            stock = Stock.objects.filter(
+                product=line.product,
+                store=instance.store
+            ).first()
+            
+            # Bloquer si stock insuffisant
+            if not stock or stock.available_quantity < line.quantity:
+                from rest_framework.exceptions import ValidationError
+                available = stock.available_quantity if stock else 0
+                raise ValidationError({
+                    'detail': f"Stock insuffisant pour {line.product.name}. "
+                              f"Disponible: {available}, Demandé: {line.quantity}"
+                })
+            
+            try:
+                # Créer mouvement de sortie - le signal update_stock_on_movement mettra à jour le stock
+                StockMovement.objects.create(
+                    product=line.product,
+                    store=instance.store,
+                    movement_type='out',
+                    quantity=line.quantity,
+                    total_value=line.total,  # Montant total de la ligne (avec taxes)
+                    invoice=instance,  # Lien vers la facture
+                    reference=f"FACT-{instance.invoice_number}",
+                    notes=f"Sortie automatique - Facture {instance.invoice_number} - Client: {instance.customer.name}",
+                    created_by=instance.created_by,
+                    is_active=True
+                )
+                # Note: Le stock sera mis à jour automatiquement par le signal update_stock_on_movement
+                
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    f"Erreur création mouvement stock pour facture {instance.invoice_number}, "
+                    f"produit {line.product.name}: {str(e)}"
+                )
+
         verbose_name_plural = "Paiements de factures"
         ordering = ['-payment_date']
     

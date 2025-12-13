@@ -188,7 +188,7 @@ class CashMovement(AuditModel):
     )
     
     # Description
-    description = models.TextField(verbose_name="Description")
+    description = models.TextField(blank=True, verbose_name="Description")
     notes = models.TextField(blank=True, verbose_name="Notes")
     
     class Meta:

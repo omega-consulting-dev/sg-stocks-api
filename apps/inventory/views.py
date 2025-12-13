@@ -16,13 +16,14 @@ from django.http import HttpResponse
 import django_filters
 
 from core.utils.export_utils import ExcelExporter, PDFExporter
+from core.mixins import StoreAccessMixin, PermissionCheckMixin, UserStoreValidationMixin
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
 import io
 
 from apps.inventory.models import (
     Store, Stock, StockMovement, StockTransfer, 
-    StockTransferLine, Inventory, InventoryLine
+    StockTransferLine, Inventory, InventoryLine, ReceiptNumberSequence
 )
 from apps.inventory.serializers import (
     StoreSerializer, StockSerializer, StockMovementSerializer,
@@ -41,7 +42,7 @@ from apps.inventory.serializers import (
 class StoreViewSet(viewsets.ModelViewSet):
     """ViewSet for Store model."""
     
-    queryset = Store.objects.select_related('manager')
+    queryset = Store.objects.filter(is_active=True).select_related('manager')
     serializer_class = StoreSerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'inventory'
@@ -56,6 +57,12 @@ class StoreViewSet(viewsets.ModelViewSet):
     
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
+    
+    def perform_destroy(self, instance):
+        """Soft delete: désactiver au lieu de supprimer."""
+        instance.is_active = False
+        instance.updated_by = self.request.user
+        instance.save()
     
     @extend_schema(summary="Statistiques d'un magasin", tags=["Inventory"])
     @action(detail=True, methods=['get'])
@@ -72,6 +79,51 @@ class StoreViewSet(viewsets.ModelViewSet):
             ).count(),
         }
         return Response(stats)
+    
+    @extend_schema(
+        summary="Liste des produits d'un magasin",
+        description="Récupère tous les produits présents dans un magasin avec leur stock.",
+        tags=["Inventory"]
+    )
+    @action(detail=True, methods=['get'])
+    def products(self, request, pk=None):
+        """Get all products in a store with their stock information."""
+        store = self.get_object()
+        
+        # Récupérer tous les stocks de ce magasin avec les infos produits
+        stocks = Stock.objects.filter(store=store).select_related(
+            'product', 'product__category'
+        ).order_by('product__name')
+        
+        # Préparer les données
+        products_data = []
+        for stock in stocks:
+            product = stock.product
+            products_data.append({
+                'product_id': product.id,
+                'product_name': product.name,
+                'product_reference': product.reference,
+                'category': product.category.name if product.category else None,
+                'quantity': float(stock.quantity),
+                'reserved_quantity': float(stock.reserved_quantity),
+                'available_quantity': float(stock.available_quantity),
+                'minimum_stock': product.minimum_stock,
+                'optimal_stock': product.optimal_stock,
+                'cost_price': float(product.cost_price) if product.cost_price else None,
+                'selling_price': float(product.selling_price) if product.selling_price else None,
+                'stock_status': 'low' if stock.quantity < product.minimum_stock else 'normal',
+                'is_active': product.is_active,
+            })
+        
+        return Response({
+            'store': {
+                'id': store.id,
+                'name': store.name,
+                'code': store.code,
+            },
+            'total_products': len(products_data),
+            'products': products_data
+        })
 
 
 @extend_schema_view(
@@ -121,12 +173,12 @@ class StockMovementFilterSet(django_filters.FilterSet):
     retrieve=extend_schema(summary="Détail d'un mouvement", tags=["Inventory"]),
     create=extend_schema(summary="Créer un mouvement", tags=["Inventory"]),
 )
-class StockMovementViewSet(viewsets.ModelViewSet):
-    """ViewSet for StockMovement model."""
+class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.ModelViewSet):
+    """ViewSet for StockMovement model with automatic store filtering."""
     
-    queryset = StockMovement.objects.select_related(
+    queryset = StockMovement.objects.filter(is_active=True).select_related(
         'product', 'store', 'destination_store','supplier', 'created_by', 'purchase_order'
-    )
+    ).prefetch_related('purchase_order__payments')
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'inventory'
@@ -135,12 +187,103 @@ class StockMovementViewSet(viewsets.ModelViewSet):
     search_fields = ['product__name', 'reference', 'supplier__name', 'supplier__supplier_code']
     ordering_fields = ['created_at']
     ordering = ['-created_at']
-    http_method_names = ['get', 'post', 'head', 'options']
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+
+    @extend_schema(summary="Obtenir le prochain numéro de pièce", tags=["Inventory"])
+    @action(detail=False, methods=['get'], url_path='next-receipt-number')
+    def next_receipt_number(self, request):
+        """Get the next available receipt number."""
+        # Récupérer le plus grand numéro existant (actif ou non) pour continuer la séquence
+        all_receipts = StockMovement.objects.filter(
+            receipt_number__startswith='RECEIPT-'
+        ).values_list('receipt_number', flat=True)
+        
+        numbers = []
+        for receipt in all_receipts:
+            try:
+                num = int(receipt.replace('RECEIPT-', ''))
+                numbers.append(num)
+            except (ValueError, AttributeError):
+                pass
+        
+        next_num = max(numbers) + 1 if numbers else 1
+        next_receipt = f'RECEIPT-{str(next_num).zfill(3)}'
+        return Response({'next_receipt_number': next_receipt})
 
     
     def perform_create(self, serializer):
         movement = serializer.save(created_by=self.request.user)
         self._update_stock(movement)
+    
+    def perform_update(self, serializer):
+        """Override to handle stock updates when modifying a movement."""
+        old_instance = self.get_object()
+        
+        # Inverser l'ancien mouvement
+        self._reverse_stock(old_instance)
+        
+        # Sauvegarder les modifications
+        updated_instance = serializer.save(updated_by=self.request.user)
+        
+        # Appliquer le nouveau mouvement
+        self._update_stock(updated_instance)
+    
+    def perform_destroy(self, instance):
+        """Override to reverse stock changes and soft delete."""
+        # Inverser les changements de stock avant la désactivation
+        self._reverse_stock(instance)
+        # Soft delete: désactiver au lieu de supprimer
+        instance.is_active = False
+        instance.updated_by = self.request.user
+        instance.save()
+    
+    def _reverse_stock(self, movement):
+        """Reverse stock changes when deleting a movement."""
+        try:
+            stock = Stock.objects.get(
+                product=movement.product,
+                store=movement.store
+            )
+            
+            if movement.movement_type == 'in':
+                # Inverser une entrée: soustraire la quantité
+                if stock.quantity < movement.quantity:
+                    raise ValidationError(
+                        f"Impossible de supprimer cette entrée. Le stock actuel ({stock.quantity}) "
+                        f"est inférieur à la quantité de l'entrée ({movement.quantity}). "
+                        "Des sorties ont probablement été effectuées depuis cette entrée."
+                    )
+                stock.quantity -= movement.quantity
+                stock.save()
+            elif movement.movement_type == 'out':
+                # Inverser une sortie: ajouter la quantité
+                stock.quantity += movement.quantity
+                stock.save()
+            elif movement.movement_type == 'transfer':
+                # Inverser un transfert: rajouter au stock source et retirer de la destination
+                stock.quantity += movement.quantity
+                stock.save()
+                
+                if movement.destination_store:
+                    try:
+                        dest_stock = Stock.objects.get(
+                            product=movement.product,
+                            store=movement.destination_store
+                        )
+                        if dest_stock.quantity < movement.quantity:
+                            raise ValidationError(
+                                f"Impossible de supprimer ce transfert. Le stock destination ({dest_stock.quantity}) "
+                                f"est inférieur à la quantité transférée ({movement.quantity})."
+                            )
+                        dest_stock.quantity -= movement.quantity
+                        dest_stock.save()
+                    except Stock.DoesNotExist:
+                        pass
+        except Stock.DoesNotExist:
+            # Si le stock n'existe pas, on ne peut pas inverser
+            raise ValidationError(
+                "Impossible de supprimer ce mouvement. Le stock associé n'existe plus."
+            )
      
     def _update_stock(self, movement):
         """Update stock based on movement type."""
@@ -153,7 +296,31 @@ class StockMovementViewSet(viewsets.ModelViewSet):
         if movement.movement_type == 'in':
             stock.quantity += movement.quantity
         elif movement.movement_type == 'out':
+            # Vérification supplémentaire (normalement déjà validé par le serializer)
+            if stock.quantity < movement.quantity:
+                raise ValidationError(
+                    f"Stock insuffisant pour {movement.product.name} dans {movement.store.name}. "
+                    f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
+                )
             stock.quantity -= movement.quantity
+        elif movement.movement_type == 'transfer':
+            # Pour les transferts, diminuer le stock source
+            if stock.quantity < movement.quantity:
+                raise ValidationError(
+                    f"Stock insuffisant pour transférer {movement.product.name}. "
+                    f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
+                )
+            stock.quantity -= movement.quantity
+            
+            # Augmenter le stock destination si spécifié
+            if movement.destination_store:
+                dest_stock, _ = Stock.objects.get_or_create(
+                    product=movement.product,
+                    store=movement.destination_store,
+                    defaults={'quantity': 0, 'reserved_quantity': 0}
+                )
+                dest_stock.quantity += movement.quantity
+                dest_stock.save()
         
         stock.save()
 
@@ -397,7 +564,7 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     module_name = 'inventory'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['source_store', 'destination_store', 'status']
-    search_fields = ['transfer_number']
+    search_fields = ['transfer_number', 'source_store__name', 'destination_store__name', 'lines__product__name']
     ordering_fields = ['transfer_date', 'created_at']
     ordering = ['-created_at']
     
@@ -411,11 +578,54 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
     
+    def _can_validate_transfer(self, transfer):
+        """Vérifier si l'utilisateur peut valider le transfert (envoi)."""
+        user = self.request.user
+        
+        # Admin peut tout faire
+        if user.is_superuser or user.role.name == 'super_admin':
+            return True
+        
+        # Doit avoir la permission de gérer l'inventaire
+        if not user.role.can_manage_inventory:
+            return False
+        
+        # Doit être assigné au store source
+        if user.role.access_scope == 'assigned':
+            return transfer.source_store in user.assigned_stores.all()
+        
+        return True
+    
+    def _can_receive_transfer(self, transfer):
+        """Vérifier si l'utilisateur peut recevoir le transfert."""
+        user = self.request.user
+        
+        # Admin peut tout faire
+        if user.is_superuser or user.role.name == 'super_admin':
+            return True
+        
+        # Doit avoir la permission de voir/gérer l'inventaire
+        if not (user.role.can_manage_inventory or user.role.can_view_inventory):
+            return False
+        
+        # Doit être assigné au store destination
+        if user.role.access_scope == 'assigned':
+            return transfer.destination_store in user.assigned_stores.all()
+        
+        return True
+    
     @extend_schema(summary="Valider le transfert", tags=["Inventory"])
     @action(detail=True, methods=['post'])
     def validate_transfer(self, request, pk=None):
         """Validate and send transfer."""
         transfer = self.get_object()
+        
+        # Vérifier les permissions
+        if not self._can_validate_transfer(transfer):
+            return Response(
+                {'error': 'Vous n\'avez pas la permission de valider ce transfert. Vous devez être assigné au magasin source.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         if transfer.status != 'draft':
             return Response(
@@ -449,6 +659,13 @@ class StockTransferViewSet(viewsets.ModelViewSet):
         """Receive transfer."""
         transfer = self.get_object()
         
+        # Vérifier les permissions
+        if not self._can_receive_transfer(transfer):
+            return Response(
+                {'error': 'Vous n\'avez pas la permission de recevoir ce transfert. Vous devez être assigné au magasin destination.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         if transfer.status != 'in_transit':
             return Response(
                 {'error': 'Ce transfert ne peut pas être reçu.'},
@@ -476,6 +693,93 @@ class StockTransferViewSet(viewsets.ModelViewSet):
         
         serializer = self.get_serializer(transfer)
         return Response(serializer.data)
+    
+    @extend_schema(summary="Annuler le transfert", tags=["Inventory"])
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Cancel transfer."""
+        transfer = self.get_object()
+        
+        if transfer.status not in ['draft', 'in_transit']:
+            return Response(
+                {'error': 'Ce transfert ne peut pas être annulé.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Si le transfert était en transit, remettre le stock au magasin source
+        if transfer.status == 'in_transit':
+            for line in transfer.lines.all():
+                stock = Stock.objects.get(
+                    product=line.product,
+                    store=transfer.source_store
+                )
+                stock.quantity += line.quantity_sent
+                stock.save()
+        
+        transfer.status = 'cancelled'
+        transfer.save()
+        
+        serializer = self.get_serializer(transfer)
+        return Response(serializer.data)
+    
+    @extend_schema(summary="Exporter les transferts en Excel", tags=["Inventory"])
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export transfers to Excel."""
+        # Récupérer les filtres
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        # Appliquer les filtres de date si présents
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        if start_date:
+            queryset = queryset.filter(transfer_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(transfer_date__lte=end_date)
+        
+        transfers = queryset.select_related(
+            'source_store', 'destination_store', 'created_by', 
+            'validated_by', 'received_by'
+        ).prefetch_related('lines__product')
+        
+        # Créer le workbook
+        wb, ws = ExcelExporter.create_workbook("Transferts de Stock")
+        
+        # En-têtes
+        columns = [
+            'N° Transfert', 'Date', 'Magasin Source', 'Magasin Destination',
+            'Nombre d\'articles', 'Statut', 'Date d\'arrivée prévue', 
+            'Date d\'arrivée réelle', 'Créé par', 'Validé par', 'Reçu par'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        # Données
+        status_labels = {
+            'draft': 'Brouillon',
+            'pending': 'En attente',
+            'in_transit': 'En transit',
+            'received': 'Reçu',
+            'cancelled': 'Annulé'
+        }
+        
+        for row_num, transfer in enumerate(transfers, 2):
+            ws.cell(row=row_num, column=1, value=transfer.transfer_number)
+            ws.cell(row=row_num, column=2, value=transfer.transfer_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=3, value=transfer.source_store.name)
+            ws.cell(row=row_num, column=4, value=transfer.destination_store.name)
+            ws.cell(row=row_num, column=5, value=transfer.lines.count())
+            ws.cell(row=row_num, column=6, value=status_labels.get(transfer.status, transfer.status))
+            ws.cell(row=row_num, column=7, value=transfer.expected_arrival.strftime('%d/%m/%Y') if transfer.expected_arrival else '')
+            ws.cell(row=row_num, column=8, value=transfer.actual_arrival.strftime('%d/%m/%Y') if transfer.actual_arrival else '')
+            ws.cell(row=row_num, column=9, value=transfer.created_by.get_full_name() if transfer.created_by else '')
+            ws.cell(row=row_num, column=10, value=transfer.validated_by.get_full_name() if transfer.validated_by else '')
+            ws.cell(row=row_num, column=11, value=transfer.received_by.get_full_name() if transfer.received_by else '')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"transferts_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
 
 
 @extend_schema_view(

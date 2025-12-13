@@ -35,7 +35,7 @@ class LoanListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'loan_number', 'lender_name', 'loan_type', 'loan_type_display',
             'principal_amount', 'interest_rate', 'duration_months', 'start_date',
-            'total_amount', 'paid_amount', 'balance_due', 'status', 'status_display'
+            'total_amount', 'paid_amount', 'balance_due', 'status', 'status_display', 'store'
         ]
 
 
@@ -48,7 +48,7 @@ class LoanDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Loan
         fields = [
-            'id', 'loan_number', 'loan_type', 'lender_name', 'lender_contact',
+            'id', 'loan_number', 'loan_type', 'lender_name', 'lender_contact', 'store',
             'principal_amount', 'interest_rate', 'duration_months', 'start_date',
             'end_date', 'status', 'total_amount', 'paid_amount', 'balance_due',
             'is_fully_paid', 'purpose', 'notes', 'schedule', 'payments',
@@ -61,7 +61,7 @@ class LoanCreateSerializer(serializers.ModelSerializer):
         model = Loan
         fields = [
             'loan_type', 'lender_name', 'lender_contact', 'principal_amount',
-            'interest_rate', 'duration_months', 'start_date', 'end_date', 'purpose', 'notes'
+            'interest_rate', 'duration_months', 'start_date', 'end_date', 'purpose', 'notes', 'store'
         ]
     
     def create(self, validated_data):

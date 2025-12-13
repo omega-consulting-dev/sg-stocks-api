@@ -117,9 +117,16 @@ class HasModulePermission(permissions.BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
         
-        # Super admin a tous les droits
+        # Super admin a tous les droits (toujours prioritaire)
         if request.user.is_superuser:
+            # Assurer que le superuser a un rôle
+            self._ensure_superuser_has_role(request.user)
             return True
+        
+        # Les managers ont accès à tout par défaut
+        if hasattr(request.user, 'role') and request.user.role:
+            if request.user.role.name in ['super_admin', 'manager']:
+                return True
         
         # Récupérer le module et l'action depuis la vue
         module_name = getattr(view, 'module_name', None)
@@ -184,3 +191,44 @@ class HasModulePermission(permissions.BasePermission):
             return allowed
 
         return False
+    
+    def _ensure_superuser_has_role(self, user):
+        """
+        Assurer que le superuser a un rôle super_admin.
+        """
+        if user.role:
+            return
+        
+        try:
+            from apps.accounts.models import Role, User
+            super_admin_role, _ = Role.objects.get_or_create(
+                name='super_admin',
+                defaults={
+                    'display_name': 'Super Administrateur',
+                    'description': 'Accès complet à toutes les fonctionnalités',
+                    'can_manage_users': True,
+                    'can_manage_products': True,
+                    'can_view_products': True,
+                    'can_manage_categories': True,
+                    'can_view_categories': True,
+                    'can_manage_services': True,
+                    'can_view_services': True,
+                    'can_manage_inventory': True,
+                    'can_view_inventory': True,
+                    'can_manage_sales': True,
+                    'can_manage_customers': True,
+                    'can_manage_suppliers': True,
+                    'can_manage_cashbox': True,
+                    'can_manage_loans': True,
+                    'can_manage_expenses': True,
+                    'can_view_analytics': True,
+                    'can_export_data': True,
+                    'access_scope': 'all',
+                }
+            )
+            User.objects.filter(pk=user.pk).update(role=super_admin_role, is_collaborator=True)
+            user.role = super_admin_role
+            user.is_collaborator = True
+        except Exception as e:
+            logger.error(f"Error ensuring superuser has role: {e}")
+

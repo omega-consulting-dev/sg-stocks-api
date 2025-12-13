@@ -66,7 +66,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     Provides CRUD operations for products.
     """
     
-    queryset = Product.objects.select_related('category').prefetch_related('images')
+    queryset = Product.objects.filter(is_active=True).select_related('category').prefetch_related('images')
     permission_classes = [IsAuthenticated, HasModulePermission]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProductFilter

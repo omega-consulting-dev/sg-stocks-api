@@ -24,9 +24,28 @@ class CashboxSessionSerializer(serializers.ModelSerializer):
 
 
 class CashMovementSerializer(serializers.ModelSerializer):
+    description = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    movement_number = serializers.CharField(read_only=True)
+    
     class Meta:
         model = CashMovement
         fields = [
             'id', 'movement_number', 'cashbox_session', 'movement_type', 'category',
             'amount', 'payment_method', 'reference', 'sale', 'description', 'notes', 'created_at'
         ]
+        read_only_fields = ['id', 'movement_number', 'created_at']
+
+
+class EncaissementSerializer(serializers.Serializer):
+    """Serializer pour agréger tous les encaissements (paiements de factures, ventes, etc.)"""
+    id = serializers.IntegerField()
+    code = serializers.CharField(max_length=50)
+    type = serializers.CharField(max_length=50)  # 'invoice_payment' ou 'sale'
+    date = serializers.DateField()
+    reference_facture = serializers.CharField(max_length=100, allow_blank=True)
+    montant = serializers.DecimalField(max_digits=12, decimal_places=2)
+    mode_paiement = serializers.CharField(max_length=50)
+    client = serializers.CharField(max_length=200, allow_blank=True)
+    created_at = serializers.DateTimeField()
+

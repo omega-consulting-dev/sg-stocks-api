@@ -72,18 +72,15 @@ class UserAdmin(BaseUserAdmin):
     """Admin for User model."""
     
     list_display = [
-        'username', 'email', 'display_name_colored', 'user_type_badge',
-        'role', 'is_active', 'is_active_employee', 'date_joined'
+        'username', 'email', 'display_name_colored',
+        'role', 'is_active', 'date_joined'
     ]
     list_filter = [
-        'user_type', 'is_active', 'is_active_employee', 'is_staff',
-        'is_collaborator', 'is_customer', 'is_supplier',
+        'is_active', 'is_staff',
         'role', 'date_joined'
     ]
     search_fields = [
         'username', 'email', 'first_name', 'last_name',
-        'customer_code', 'customer_company_name',
-        'supplier_code', 'supplier_company_name',
         'employee_id', 'phone'
     ]
     ordering = ['-date_joined']
@@ -99,31 +96,11 @@ class UserAdmin(BaseUserAdmin):
                 'avatar', 'address', 'city', 'postal_code', 'country'
             )
         }),
-        ('Type d\'utilisateur', {
-            'fields': (
-                'user_type', 'is_collaborator', 'is_customer', 'is_supplier'
-            )
-        }),
-        ('Collaborateur', {
+        ('Employé', {
             'fields': (
                 'employee_id', 'role', 'secondary_roles', 'assigned_stores',
-                'hire_date', 'termination_date', 'is_active_employee'
-            ),
-            'classes': ('collapse',)
-        }),
-        ('Client', {
-            'fields': (
-                'customer_code', 'customer_company_name', 'customer_tax_id',
-                'customer_credit_limit', 'customer_payment_term'
-            ),
-            'classes': ('collapse',)
-        }),
-        ('Fournisseur', {
-            'fields': (
-                'supplier_code', 'supplier_company_name', 'supplier_tax_id',
-                'supplier_bank_account', 'supplier_rating'
-            ),
-            'classes': ('collapse',)
+                'hire_date', 'termination_date'
+            )
         }),
         ('Contact d\'urgence', {
             'fields': ('emergency_contact_name', 'emergency_contact_phone'),
@@ -148,13 +125,8 @@ class UserAdmin(BaseUserAdmin):
             'classes': ('wide',),
             'fields': ('username', 'email', 'password1', 'password2'),
         }),
-        ('Type d\'utilisateur', {
-            'fields': (
-                'user_type', 'is_collaborator', 'is_customer', 'is_supplier'
-            )
-        }),
         ('Informations de base', {
-            'fields': ('first_name', 'last_name', 'phone')
+            'fields': ('first_name', 'last_name', 'phone', 'role')
         }),
     )
     
@@ -169,22 +141,6 @@ class UserAdmin(BaseUserAdmin):
             obj.get_display_name()
         )
     display_name_colored.short_description = "Nom d'affichage"
-    
-    def user_type_badge(self, obj):
-        """Display user type as badge."""
-        colors = {
-            'collaborator': '#17a2b8',
-            'customer': '#28a745',
-            'supplier': '#ffc107',
-            'customer_supplier': '#6c757d',
-        }
-        color = colors.get(obj.user_type, '#6c757d')
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 3px;">{}</span>',
-            color,
-            obj.get_user_type_display()
-        )
-    user_type_badge.short_description = "Type"
     
     def get_queryset(self, request):
         """Optimize queryset."""

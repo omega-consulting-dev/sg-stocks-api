@@ -3311,29 +3311,43 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/?status=sent",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/?status=sent&store=",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								""
 							],
 							"query": [
 								{
 									"key": "status",
-									"value": "sent"
+									"value": "sent",
+									"description": "draft, sent, paid, overdue, cancelled"
+								},
+								{
+									"key": "store",
+									"value": "",
+									"description": "Filtrer par point de vente (ID)"
 								},
 								{
 									"key": "customer",
-									"value": "5",
-									"disabled": true
+									"value": "",
+									"disabled": true,
+									"description": "Filtrer par client (ID)"
+								},
+								{
+									"key": "search",
+									"value": "",
+									"disabled": true,
+									"description": "Recherche par numéro, client"
 								}
 							]
-						}
+						},
+						"description": "Liste des factures avec filtrage sécurisé par store assigné selon le rôle.\n- Admin: voit toutes les factures\n- Caissier: voit uniquement les factures de ses stores assignés"
 					},
 					"response": []
 				},
@@ -3343,14 +3357,14 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/:id/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/:id/",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								":id",
 								""
@@ -3361,7 +3375,44 @@
 									"value": "1"
 								}
 							]
-						}
+						},
+						"description": "Détails d'une facture avec lignes et paiements"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Invoice (NEW - Secure)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"customer\": 1,\n  \"store\": 1,\n  \"invoice_date\": \"2025-12-10\",\n  \"payment_term\": \"30_days\",\n  \"discount_amount\": 0,\n  \"notes\": \"Facture test avec mouvement stock automatique\",\n  \"lines\": [\n    {\n      \"description\": \"Produit A\",\n      \"quantity\": 5,\n      \"unit_price\": 10000,\n      \"tax_rate\": 19.25,\n      \"discount_percentage\": 0\n    },\n    {\n      \"description\": \"Produit B\",\n      \"quantity\": 3,\n      \"unit_price\": 25000,\n      \"tax_rate\": 19.25,\n      \"discount_percentage\": 5\n    }\n  ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"{{api_version}}",
+								"invoicing",
+								"invoices",
+								""
+							]
+						},
+						"description": "Création facture avec:\n- store OBLIGATOIRE (validation accès)\n- Auto-génération numéro facture\n- Calcul automatique totaux\n- Due date selon payment_term\n\nSécurité:\n- Si store non fourni, utilise premier store assigné\n- Vérifie que user a accès au store\n- ValidationError si store non autorisé"
 					},
 					"response": []
 				},
@@ -3372,7 +3423,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"sale\": 1,\n  \"invoice_date\": \"2025-10-14\",\n  \"due_date\": \"2025-11-14\"\n}",
+							"raw": "{\n  \"sale\": 1,\n  \"invoice_date\": \"2025-12-10\",\n  \"due_date\": \"2026-01-10\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -3380,19 +3431,63 @@
 							}
 						},
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/create_from_sale/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/create_from_sale/",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								"create_from_sale",
 								""
 							]
-						}
+						},
+						"description": "Crée facture depuis une vente existante.\nLe store est récupéré automatiquement depuis la vente."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Invoice Status to Sent",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"sent\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/:id/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"{{api_version}}",
+								"invoicing",
+								"invoices",
+								":id",
+								""
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "1"
+								}
+							]
+						},
+						"description": "⚠️ IMPORTANT: Changement status à 'sent' ou 'paid' déclenche:\n- Création automatique StockMovement type='out'\n- Vérification stock disponible\n- Décrémentation stock\n- Traçabilité complète avec reference FACT-XXX"
 					},
 					"response": []
 				},
@@ -3403,7 +3498,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"email\": \"client@example.com\",\n  \"subject\": \"Votre facture SG-Stock\",\n  \"message\": \"Veuillez trouver ci-joint votre facture.\"\n}",
+							"raw": "{}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -3411,14 +3506,14 @@
 							}
 						},
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/:id/send_email/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/:id/send_email/",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								":id",
 								"send_email",
@@ -3430,27 +3525,28 @@
 									"value": "1"
 								}
 							]
-						}
+						},
+						"description": "Envoyer facture par email (change status à 'sent')"
 					},
 					"response": []
 				},
 				{
-					"name": "Download Invoice PDF",
+					"name": "Generate Invoice PDF",
 					"request": {
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/:id/download_pdf/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/:id/generate_pdf/",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								":id",
-								"download_pdf",
+								"generate_pdf",
 								""
 							],
 							"variable": [
@@ -3459,7 +3555,8 @@
 									"value": "1"
 								}
 							]
-						}
+						},
+						"description": "Télécharger facture en PDF"
 					},
 					"response": []
 				},
@@ -3470,7 +3567,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"amount\": 650000,\n  \"payment_date\": \"2025-10-15\",\n  \"payment_method\": \"bank_transfer\",\n  \"reference\": \"VIREMENT-001\"\n}",
+							"raw": "{\n  \"amount\": 50000,\n  \"payment_method\": \"cash\",\n  \"reference\": \"CASH-001\",\n  \"notes\": \"Paiement comptant\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -3478,14 +3575,14 @@
 							}
 						},
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/:id/record_payment/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/:id/record_payment/",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
-								"invoices",
+								"invoicing",
 								"invoices",
 								":id",
 								"record_payment",
@@ -3497,51 +3594,389 @@
 									"value": "1"
 								}
 							]
-						}
+						},
+						"description": "Enregistrer paiement pour facture.\nMéthodes: cash, card, mobile_money, check, bank_transfer"
 					},
 					"response": []
 				},
 				{
-					"name": "Cancel Invoice",
+					"name": "Export Invoices Excel",
 					"request": {
-						"method": "POST",
+						"method": "GET",
 						"header": [],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"reason\": \"Erreur de facturation\"\n}",
-							"options": {
-								"raw": {
-									"language": "json"
-								}
-							}
-						},
 						"url": {
-							"raw": "{{base_url}}/api/{{api_version}}/invoices/invoices/:id/cancel/",
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/export_excel/?date_from=2025-01-01&date_to=2025-12-31&store=",
 							"host": [
 								"{{base_url}}"
 							],
 							"path": [
 								"api",
 								"{{api_version}}",
+								"invoicing",
 								"invoices",
-								"invoices",
-								":id",
-								"cancel",
+								"export_excel",
 								""
 							],
-							"variable": [
+							"query": [
 								{
-									"key": "id",
-									"value": "1"
+									"key": "date_from",
+									"value": "2025-01-01",
+									"description": "Date début (YYYY-MM-DD)"
+								},
+								{
+									"key": "date_to",
+									"value": "2025-12-31",
+									"description": "Date fin (YYYY-MM-DD)"
+								},
+								{
+									"key": "store",
+									"value": "",
+									"description": "Filtrer par store"
 								}
 							]
-						}
+						},
+						"description": "Export Excel avec filtrage par dates et store"
+					},
+					"response": []
+				},
+				{
+					"name": "Export Invoices PDF",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/{{api_version}}/invoicing/invoices/export_pdf/?date_from=2025-01-01&date_to=2025-12-31",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"{{api_version}}",
+								"invoicing",
+								"invoices",
+								"export_pdf",
+								""
+							],
+							"query": [
+								{
+									"key": "date_from",
+									"value": "2025-01-01"
+								},
+								{
+									"key": "date_to",
+									"value": "2025-12-31"
+								}
+							]
+						},
+						"description": "Export PDF liste des factures"
+					},
+					"response": []
+				},
+				{
+					"name": "Verify Stock Movement Created",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/{{api_version}}/inventory/movements/?movement_type=out&search=FACT-",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"{{api_version}}",
+								"inventory",
+								"movements",
+								""
+							],
+							"query": [
+								{
+									"key": "movement_type",
+									"value": "out"
+								},
+								{
+									"key": "search",
+									"value": "FACT-",
+									"description": "Chercher mouvements générés par factures"
+								}
+							]
+						},
+						"description": "Vérifier que les mouvements de stock ont été créés automatiquement.\nReference format: FACT-{invoice_number}"
 					},
 					"response": []
 				}
 			]
 		}
 	,
+	{
+		"name": "Customers",
+		"item": [
+			{
+				"name": "List Customers",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/?search=&is_active=true&payment_term=&city=",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							""
+						],
+						"query": [
+							{
+								"key": "search",
+								"value": "",
+								"description": "Recherche par code, nom, email, téléphone"
+							},
+							{
+								"key": "is_active",
+								"value": "true",
+								"description": "Filtrer par statut actif"
+							},
+							{
+								"key": "payment_term",
+								"value": "",
+								"description": "immediate, 15_days, 30_days, 60_days, 90_days"
+							},
+							{
+								"key": "city",
+								"value": "",
+								"description": "Filtrer par ville"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Get Customer by ID",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Create Customer",
+				"request": {
+					"method": "POST",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"customer_code\": \"CLI00001\",\n  \"name\": \"Entreprise ABC SARL\",\n  \"email\": \"contact@abc.cm\",\n  \"phone\": \"+237690123456\",\n  \"mobile\": \"+237677654321\",\n  \"address\": \"123 Rue des Affaires\",\n  \"city\": \"Douala\",\n  \"postal_code\": \"BP 1234\",\n  \"country\": \"Cameroun\",\n  \"billing_address\": \"123 Rue des Affaires, Douala\",\n  \"tax_id\": \"M012345678901234\",\n  \"payment_term\": \"30_days\",\n  \"credit_limit\": 500000.00,\n  \"notes\": \"Client VIP - Livraison prioritaire\",\n  \"is_active\": true\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Update Customer",
+				"request": {
+					"method": "PUT",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"name\": \"Entreprise ABC SARL - Mise à jour\",\n  \"email\": \"contact@abc.cm\",\n  \"phone\": \"+237690123456\",\n  \"credit_limit\": 750000.00,\n  \"payment_term\": \"60_days\",\n  \"is_active\": true\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Partial Update Customer",
+				"request": {
+					"method": "PATCH",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"credit_limit\": 1000000.00,\n  \"notes\": \"Client premium\"\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Delete Customer",
+				"request": {
+					"method": "DELETE",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Export Customers Excel",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/export_excel/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							"export_excel",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Import Customers Excel",
+				"request": {
+					"method": "POST",
+					"header": [],
+					"body": {
+						"mode": "formdata",
+						"formdata": [
+							{
+								"key": "file",
+								"type": "file",
+								"src": []
+							}
+						]
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/customers/import_excel/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"customers",
+							"import_excel",
+							""
+						]
+					}
+				},
+				"response": []
+			}
+		]
+	},
 	{
 		"name": "Suppliers",
 		"item": [
@@ -3551,7 +3986,7 @@
 					"method": "GET",
 					"header": [],
 					"url": {
-						"raw": "{{base_url}}/api/{{api_version}}/suppliers/",
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/?search=&is_active=true&payment_term=&rating_min=",
 						"host": [
 							"{{base_url}}"
 						],
@@ -3560,6 +3995,28 @@
 							"{{api_version}}",
 							"suppliers",
 							""
+						],
+						"query": [
+							{
+								"key": "search",
+								"value": "",
+								"description": "Recherche par code, nom, email, téléphone"
+							},
+							{
+								"key": "is_active",
+								"value": "true",
+								"description": "Filtrer par statut actif"
+							},
+							{
+								"key": "payment_term",
+								"value": "",
+								"description": "immediate, 15_days, 30_days, 60_days, 90_days"
+							},
+							{
+								"key": "rating_min",
+								"value": "",
+								"description": "Note minimale (1-5)"
+							}
 						]
 					}
 				},
@@ -3593,6 +4050,222 @@
 				"response": []
 			},
 			{
+				"name": "Create Supplier",
+				"request": {
+					"method": "POST",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"supplier_code\": \"FRN00001\",\n  \"name\": \"Global Tech Supplies\",\n  \"contact_person\": \"Jean Dupont\",\n  \"email\": \"jean@globaltech.cm\",\n  \"phone\": \"+237699887766\",\n  \"mobile\": \"+237677998877\",\n  \"website\": \"https://globaltech.cm\",\n  \"address\": \"456 Avenue du Commerce\",\n  \"city\": \"Yaoundé\",\n  \"postal_code\": \"BP 5678\",\n  \"country\": \"Cameroun\",\n  \"tax_id\": \"M098765432109876\",\n  \"bank_account\": \"10001234567890123456\",\n  \"payment_term\": \"30_days\",\n  \"rating\": 4,\n  \"notes\": \"Fournisseur fiable avec livraison rapide\",\n  \"is_active\": true\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Update Supplier",
+				"request": {
+					"method": "PUT",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"name\": \"Global Tech Supplies - Mise à jour\",\n  \"contact_person\": \"Jean Dupont\",\n  \"email\": \"jean@globaltech.cm\",\n  \"phone\": \"+237699887766\",\n  \"rating\": 5,\n  \"payment_term\": \"60_days\",\n  \"is_active\": true\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Partial Update Supplier",
+				"request": {
+					"method": "PATCH",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"body": {
+						"mode": "raw",
+						"raw": "{\n  \"rating\": 5,\n  \"notes\": \"Excellent fournisseur\"\n}",
+						"options": {
+							"raw": {
+								"language": "json"
+							}
+						}
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Delete Supplier",
+				"request": {
+					"method": "DELETE",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/:id/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							":id",
+							""
+						],
+						"variable": [
+							{
+								"key": "id",
+								"value": "1"
+							}
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Export Suppliers Excel",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/export_excel/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							"export_excel",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Export Suppliers PDF",
+				"request": {
+					"method": "GET",
+					"header": [],
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/export_pdf/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							"export_pdf",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
+				"name": "Import Suppliers Excel",
+				"request": {
+					"method": "POST",
+					"header": [],
+					"body": {
+						"mode": "formdata",
+						"formdata": [
+							{
+								"key": "file",
+								"type": "file",
+								"src": []
+							}
+						]
+					},
+					"url": {
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/import_excel/",
+						"host": [
+							"{{base_url}}"
+						],
+						"path": [
+							"api",
+							"{{api_version}}",
+							"suppliers",
+							"import_excel",
+							""
+						]
+					}
+				},
+				"response": []
+			},
+			{
 				"name": "Suppliers Debts",
 				"request": {
 					"method": "GET",
@@ -3619,7 +4292,7 @@
 					"method": "GET",
 					"header": [],
 					"url": {
-						"raw": "{{base_url}}/api/{{api_version}}/suppliers/payments/",
+						"raw": "{{base_url}}/api/{{api_version}}/suppliers/payments/?supplier=",
 						"host": [
 							"{{base_url}}"
 						],
@@ -3629,6 +4302,13 @@
 							"suppliers",
 							"payments",
 							""
+						],
+						"query": [
+							{
+								"key": "supplier",
+								"value": "",
+								"description": "Filter by supplier ID"
+							}
 						]
 					}
 				},
@@ -3646,10 +4326,11 @@
 					],
 					"body": {
 						"mode": "raw",
-						"raw": "{\n  \"supplier\": 1,\n  \"purchase_order\": 1,\n  \"payment_date\": \"2025-12-03\",\n  \"amount\": \"100000.00\",\n  \"payment_method\": \"bank_transfer\",\n  \"reference\": \"REF-001\",\n  \"notes\": \"Règlement partiel\"\n}",
+						"raw": "{\n  \"supplier\": 1,\n  \"payment_date\": \"2025-12-09\",\n  \"amount\": 50000,\n  \"payment_method\": \"cash\",\n  \"reference\": \"PAIEMENT-001\",\n  \"notes\": \"Paiement automatique - répartition sur toutes les dettes\"\n}",
 						"options": {
 							"raw": {
-								"language": "json"
+								"language": "json",
+								"description": "PAIEMENT AUTOMATISÉ:\n- Le champ 'purchase_order' est OPTIONNEL\n- Si omis: le paiement est automatiquement réparti sur toutes les dettes du fournisseur par ordre de date d'échéance\n- Si spécifié: le paiement s'applique d'abord sur ce bon de commande, puis l'excédent est réparti sur les autres dettes\n- Les dettes totalement payées disparaissent automatiquement de /suppliers/debts/"
 							}
 						}
 					},

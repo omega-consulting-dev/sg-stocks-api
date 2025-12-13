@@ -85,22 +85,23 @@ class Supplier(ActiveModel, AuditModel):
     def get_balance(self):
         """Calculate supplier account balance (what we owe)."""
         from apps.suppliers.models import PurchaseOrder
-        from django.db.models import Sum
+        from django.db.models import Sum, F
         
+        # Inclure les commandes confirmées ET reçues (entrées en stock)
+        # Filtrer uniquement celles avec un solde impayé (balance_due > 0)
         orders = PurchaseOrder.objects.filter(
             supplier=self,
-            status='confirmed'
-        )
+            status__in=['confirmed', 'received']
+        ).annotate(
+            balance_due_calc=F('total_amount') - F('paid_amount')
+        ).filter(balance_due_calc__gt=0)
         
-        total_ordered = orders.aggregate(
-            total=Sum('total_amount')
+        # Sommer les balances dues uniquement (ignorer les sur-paiements)
+        total_balance = orders.aggregate(
+            total=Sum(F('total_amount') - F('paid_amount'))
         )['total'] or 0
         
-        total_paid = orders.aggregate(
-            total=Sum('paid_amount')
-        )['total'] or 0
-        
-        return total_ordered - total_paid
+        return total_balance
 
 
 class PurchaseOrder(AuditModel):
@@ -167,7 +168,8 @@ class PurchaseOrder(AuditModel):
         max_digits=12,
         decimal_places=2,
         default=0,
-        verbose_name="Montant payé"
+        verbose_name="Montant payé",
+        help_text="Montant déjà versé au fournisseur pour cette commande"
     )
     
     notes = models.TextField(blank=True, verbose_name="Notes")

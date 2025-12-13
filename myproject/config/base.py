@@ -130,7 +130,7 @@ WSGI_APPLICATION = 'myproject.wsgi.application'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'accounts.User'
- 
+AUDITLOG_LOGENTRY_MODEL = "auditlog.LogEntry"
 # Application definition
 SHARED_APPS = (
     'django_tenants',
@@ -198,6 +198,8 @@ MIDDLEWARE = [
     'apps.accounts.middlewares.LoginLogoutMiddleware',
     'auditlog.middleware.AuditlogMiddleware',
 ]
+
+
 
 TEMPLATES = [
     {

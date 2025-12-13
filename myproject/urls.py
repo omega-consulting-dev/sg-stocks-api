@@ -9,12 +9,13 @@ urlpatterns = [
 
     # API v1
     path('api/v1/auth/', include('apps.accounts.urls')),
+    path('api/v1/main/', include('apps.main.urls')),
     path('api/v1/tenants/', include('apps.tenants.urls')),
     path('api/v1/products/', include('apps.products.urls')),
     path('api/v1/services/', include('apps.services.urls')),
     path('api/v1/inventory/', include('apps.inventory.urls')),
     path('api/v1/sales/', include('apps.sales.urls')),
-    path('api/v1/invoices/', include('apps.invoicing.urls')),
+    path('api/v1/invoicing/', include('apps.invoicing.urls')),
     path('api/v1/customers/', include('apps.customers.urls')),
     path('api/v1/suppliers/', include('apps.suppliers.urls')),
     path('api/v1/cashbox/', include('apps.cashbox.urls')),

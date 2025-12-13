@@ -37,6 +37,16 @@ class Loan(AuditModel):
     lender_name = models.CharField(max_length=200, verbose_name="Nom du prêteur")
     lender_contact = models.CharField(max_length=200, blank=True, verbose_name="Contact prêteur")
     
+    # Store (point of sale)
+    store = models.ForeignKey(
+        'inventory.Store',
+        on_delete=models.PROTECT,
+        related_name='loans',
+        null=True,
+        blank=True,
+        verbose_name="Point de vente"
+    )
+    
     # Loan details
     principal_amount = models.DecimalField(
         max_digits=12,

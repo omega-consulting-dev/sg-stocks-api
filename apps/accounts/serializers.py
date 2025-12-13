@@ -46,8 +46,12 @@ class RoleSerializer(serializers.ModelSerializer):
         model = Role
         fields = [
             'id', 'name', 'display_name', 'description', 'access_scope',
-            'can_manage_users', 'can_manage_products', 'can_manage_services',
-            'can_manage_inventory', 'can_manage_sales', 'can_manage_customers',
+            'can_manage_users', 
+            'can_manage_products', 'can_view_products',
+            'can_manage_categories', 'can_view_categories',
+            'can_manage_services', 'can_view_services',
+            'can_manage_inventory', 'can_view_inventory',
+            'can_manage_sales', 'can_manage_customers',
             'can_manage_suppliers', 'can_manage_cashbox', 'can_manage_loans',
             'can_manage_expenses', 'can_view_analytics', 'can_export_data',
             'permissions_count', 'users_count', 'created_at', 'updated_at'
@@ -81,17 +85,14 @@ class UserListSerializer(serializers.ModelSerializer):
     """Serializer for user list view (minimal data)."""
     
     role_name = serializers.CharField(source='role.display_name', read_only=True)
-    user_type_display = serializers.CharField(source='get_user_type_display', read_only=True)
     display_name = serializers.CharField(source='get_display_name', read_only=True)
     
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
-            'display_name', 'user_type', 'user_type_display',
-            'phone', 'avatar', 'role_name',
-            'is_collaborator', 'is_customer', 'is_supplier',
-            'is_active', 'is_active_employee', 'date_joined'
+            'display_name', 'phone', 'avatar', 'role_name',
+            'is_active', 'date_joined'
         ]
 
 
@@ -101,33 +102,19 @@ class UserDetailSerializer(serializers.ModelSerializer):
     role_name = serializers.CharField(source='role.display_name', read_only=True)
     secondary_roles_list = RoleSerializer(source='secondary_roles', many=True, read_only=True)
     assigned_stores_list = serializers.SerializerMethodField()
-    user_type_display = serializers.CharField(source='get_user_type_display', read_only=True)
     display_name = serializers.CharField(source='get_display_name', read_only=True)
-    customer_balance = serializers.SerializerMethodField()
-    supplier_balance = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name', 'display_name',
-            'user_type', 'user_type_display', 'phone', 'alternative_phone',
+            'phone', 'alternative_phone',
             'avatar', 'address', 'city', 'postal_code', 'country',
             
-            # Collaborateur
-            'is_collaborator', 'employee_id', 'role', 'role_name',
+            # Employee
+            'employee_id', 'role', 'role_name',
             'secondary_roles', 'secondary_roles_list', 'assigned_stores',
             'assigned_stores_list', 'hire_date', 'termination_date',
-            'is_active_employee',
-            
-            # Client
-            'is_customer', 'customer_code', 'customer_company_name',
-            'customer_tax_id', 'customer_credit_limit', 'customer_payment_term',
-            'customer_balance',
-            
-            # Fournisseur
-            'is_supplier', 'supplier_code', 'supplier_company_name',
-            'supplier_tax_id', 'supplier_bank_account', 'supplier_rating',
-            'supplier_balance',
             
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
@@ -140,23 +127,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
     
     def get_assigned_stores_list(self, obj):
         from apps.inventory.serializers import StoreMinimalSerializer
-        print(":::::::::::::::::::::::::::::::::::::::Assigned stores:", obj)
         return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
-    
-    def get_customer_balance(self, obj):
-        if obj.is_customer:
-            return float(obj.get_customer_balance())
-        return None
-    
-
-    
-    def get_supplier_balance(self, obj):
-        if not obj.is_supplier or not hasattr(obj, 'supplier'):
-            return 0
-
-        transactions = SupplierPayment.objects.filter(supplier=obj.supplier)
-        total = transactions.aggregate(total=Sum('amount'))['total'] or 0
-        return total
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for user creation."""
@@ -177,20 +148,12 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'username', 'email', 'password', 'password_confirm',
-            'first_name', 'last_name', 'user_type', 'phone',
+            'first_name', 'last_name', 'phone',
             'alternative_phone', 'address', 'city', 'postal_code', 'country',
             
-            # Collaborateur
-            'is_collaborator', 'employee_id', 'role', 'secondary_roles',
+            # Employee
+            'employee_id', 'role', 'secondary_roles',
             'assigned_stores', 'hire_date',
-            
-            # Client
-            'is_customer', 'customer_code', 'customer_company_name',
-            'customer_tax_id', 'customer_credit_limit', 'customer_payment_term',
-            
-            # Fournisseur
-            'is_supplier', 'supplier_code', 'supplier_company_name',
-            'supplier_tax_id', 'supplier_bank_account', 'supplier_rating',
             
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
@@ -206,28 +169,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 'password_confirm': 'Les mots de passe ne correspondent pas.'
             })
         
-        # Vérifier qu'au moins un type d'utilisateur est défini
-        if not any([attrs.get('is_collaborator'), attrs.get('is_customer'), attrs.get('is_supplier')]):
+        # Le rôle est obligatoire pour les utilisateurs
+        if not attrs.get('role'):
             raise serializers.ValidationError({
-                'user_type': 'L\'utilisateur doit être au moins un collaborateur, un client ou un fournisseur.'
-            })
-        
-        # Si collaborateur, le rôle est obligatoire
-        if attrs.get('is_collaborator') and not attrs.get('role'):
-            raise serializers.ValidationError({
-                'role': 'Le rôle est obligatoire pour un collaborateur.'
-            })
-        
-        # Si client, le code client est obligatoire
-        if attrs.get('is_customer') and not attrs.get('customer_code'):
-            raise serializers.ValidationError({
-                'customer_code': 'Le code client est obligatoire.'
-            })
-        
-        # Si fournisseur, le code fournisseur est obligatoire
-        if attrs.get('is_supplier') and not attrs.get('supplier_code'):
-            raise serializers.ValidationError({
-                'supplier_code': 'Le code fournisseur est obligatoire.'
+                'role': 'Le rôle est obligatoire.'
             })
         
         return attrs
@@ -263,17 +208,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'email', 'first_name', 'last_name', 'phone', 'alternative_phone',
             'address', 'city', 'postal_code', 'country', 'avatar',
             
-            # Collaborateur
+            # Employee
             'employee_id', 'role', 'secondary_roles', 'assigned_stores',
-            'hire_date', 'termination_date', 'is_active_employee',
-            
-            # Client
-            'customer_company_name', 'customer_tax_id',
-            'customer_credit_limit', 'customer_payment_term',
-            
-            # Fournisseur
-            'supplier_company_name', 'supplier_tax_id',
-            'supplier_bank_account', 'supplier_rating',
+            'hire_date', 'termination_date',
             
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
@@ -390,8 +327,6 @@ class UserStatsSerializer(serializers.Serializer):
     
     total_users = serializers.IntegerField()
     active_users = serializers.IntegerField()
-    collaborators = serializers.IntegerField()
-    customers = serializers.IntegerField()
-    suppliers = serializers.IntegerField()
+    staff_users = serializers.IntegerField()
     new_users_this_month = serializers.IntegerField()
     active_sessions = serializers.IntegerField()

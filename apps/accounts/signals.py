@@ -11,24 +11,12 @@ from apps.accounts.models import User, UserActivity, UserSession
 @receiver(pre_save, sender=User)
 def generate_codes(sender, instance, **kwargs):
     """
-    Générer automatiquement les codes si non fournis.
+    Générer automatiquement le matricule employé si non fourni.
     """
-    # Générer le code client si c'est un client et qu'il n'a pas de code
-    if instance.is_customer and not instance.customer_code:
-        # Compter les clients existants
-        count = User.objects.filter(is_customer=True).count() + 1
-        instance.customer_code = f"CLI{count:05d}"
-    
-    # Générer le code fournisseur si c'est un fournisseur et qu'il n'a pas de code
-    if instance.is_supplier and not instance.supplier_code:
-        # Compter les fournisseurs existants
-        count = User.objects.filter(is_supplier=True).count() + 1
-        instance.supplier_code = f"FOU{count:05d}"
-    
-    # Générer le matricule employé si c'est un collaborateur et qu'il n'a pas de matricule
-    if instance.is_collaborator and not instance.employee_id:
-        # Compter les collaborateurs existants
-        count = User.objects.filter(is_collaborator=True).count() + 1
+    # Générer le matricule employé s'il n'a pas de matricule
+    if not instance.employee_id:
+        # Compter les employés existants
+        count = User.objects.count() + 1
         instance.employee_id = f"EMP{count:05d}"
 
 
@@ -37,6 +25,41 @@ def user_post_save(sender, instance, created, **kwargs):
     """
     Actions après la sauvegarde d'un utilisateur.
     """
+    # Assigner automatiquement le rôle super_admin aux superusers
+    if instance.is_superuser and not instance.role:
+        try:
+            from apps.accounts.models import Role
+            super_admin_role, _ = Role.objects.get_or_create(
+                name='super_admin',
+                defaults={
+                    'display_name': 'Super Administrateur',
+                    'description': 'Accès complet à toutes les fonctionnalités',
+                    'can_manage_users': True,
+                    'can_manage_products': True,
+                    'can_view_products': True,
+                    'can_manage_categories': True,
+                    'can_view_categories': True,
+                    'can_manage_services': True,
+                    'can_view_services': True,
+                    'can_manage_inventory': True,
+                    'can_view_inventory': True,
+                    'can_manage_sales': True,
+                    'can_manage_customers': True,
+                    'can_manage_suppliers': True,
+                    'can_manage_cashbox': True,
+                    'can_manage_loans': True,
+                    'can_manage_expenses': True,
+                    'can_view_analytics': True,
+                    'can_export_data': True,
+                    'access_scope': 'all',
+                }
+            )
+            instance.role = super_admin_role
+            # Utiliser update pour éviter de déclencher à nouveau le signal
+            User.objects.filter(pk=instance.pk).update(role=super_admin_role)
+        except Exception as e:
+            print(f"Error assigning super_admin role: {e}")
+    
     if created:
         # Log de création d'utilisateur
         try:
@@ -51,40 +74,7 @@ def user_post_save(sender, instance, created, **kwargs):
             )
         except Exception as e:
             print(f"Error creating user activity: {e}")
-        
-        # If the new user is a supplier, ensure a Supplier record exists
-        try:
-            if getattr(instance, 'is_supplier', False):
-                # import here to avoid circular import at module load
-                from apps.suppliers.models import Supplier
 
-                Supplier.objects.get_or_create(
-                    user=instance,
-                    defaults={
-                        'supplier_code': getattr(instance, 'supplier_code', instance.username),
-                        'name': getattr(instance, 'supplier_company_name', instance.get_display_name()),
-                        'email': instance.email or ''
-                    }
-                )
-        except Exception as e:
-            print(f"Error creating Supplier for user: {e}")
-        
-        # If the new user is a customer, ensure a Customer record exists
-        try:
-            if getattr(instance, 'is_customer', False):
-                # import here to avoid circular import at module load
-                from apps.customers.models import Customer
-
-                Customer.objects.get_or_create(
-                    user=instance,
-                    defaults={
-                        'customer_code': getattr(instance, 'customer_code', instance.username),
-                        'name': getattr(instance, 'customer_company_name', instance.get_display_name()),
-                        'email': instance.email or ''
-                    }
-                )
-        except Exception as e:
-            print(f"Error creating Customer for user: {e}")
 
 
 @receiver(user_logged_in)

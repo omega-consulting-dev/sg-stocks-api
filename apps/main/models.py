@@ -3,6 +3,9 @@ from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.utils.translation import gettext_lazy as _
 
+# Import CompanySettings
+from .models_settings import CompanySettings
+
 class User(AbstractUser):
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=150, validators=[UnicodeUsernameValidator()],)

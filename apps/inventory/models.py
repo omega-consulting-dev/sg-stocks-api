@@ -99,7 +99,7 @@ class Stock(AuditModel):
         return self.quantity - self.reserved_quantity
 
 
-class StockMovement(AuditModel):
+class StockMovement(ActiveModel, AuditModel):
     """
     Stock movement tracking model.
     """
@@ -152,6 +152,16 @@ class StockMovement(AuditModel):
         related_name='stock_movements',
         verbose_name="Bon de commande"
     )
+    
+    # Optional link to an invoice when movement is from a sale/invoice
+    invoice = models.ForeignKey(
+        'invoicing.Invoice',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='stock_movements',
+        verbose_name="Facture"
+    )
 
     unit_cost = models.DecimalField(
     max_digits=12,
@@ -161,8 +171,38 @@ class StockMovement(AuditModel):
     verbose_name="Prix d'achat unitaire"
     )
     
-    # Reference to source document
-    reference = models.CharField(max_length=100, blank=True, verbose_name="Référence")
+    # Total value (for sales/invoices - montant total de la ligne avec taxes)
+    total_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Montant total",
+        help_text="Montant total de la ligne (avec taxes) pour les ventes/factures"
+    )
+    
+    # Invoice amount (montant de la facture)
+    invoice_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Montant de la facture",
+        help_text="Montant total de la facture (peut différer de unit_cost * quantity)"
+    )
+    
+    # Receipt number for stock entries (RECEIPT-001, RECEIPT-002, etc.)
+    receipt_number = models.CharField(
+        max_length=50, 
+        blank=True, 
+        unique=True,
+        null=True,
+        verbose_name="Numéro de pièce", 
+        help_text="Numéro de la pièce d'entrée en stock"
+    )
+    
+    # Reference to source document (e.g., delivery note, invoice)
+    reference = models.CharField(max_length=100, blank=True, verbose_name="Référence document", help_text="Référence du bon de livraison ou facture")
     
     # For transfers
     destination_store = models.ForeignKey(
@@ -389,3 +429,30 @@ class InventoryLine(TimeStampedModel):
     def difference(self):
         """Calculate difference between theoretical and counted."""
         return self.counted_quantity - self.theoretical_quantity
+
+
+class ReceiptNumberSequence(models.Model):
+    """
+    Model to track receipt number sequences to maintain continuity even after deletions.
+    """
+    last_number = models.IntegerField(default=0, verbose_name="Dernier numéro utilisé")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Mis à jour le")
+    
+    class Meta:
+        verbose_name = "Séquence de numéros de pièce"
+        verbose_name_plural = "Séquences de numéros de pièce"
+    
+    def __str__(self):
+        return f"Dernier numéro: RECEIPT-{str(self.last_number).zfill(3)}"
+    
+    @classmethod
+    def get_next_number(cls):
+        """Get and increment the next receipt number."""
+        from django.db import transaction
+        
+        with transaction.atomic():
+            # Get or create the sequence (there should only be one record)
+            sequence, created = cls.objects.get_or_create(pk=1, defaults={'last_number': 0})
+            sequence.last_number += 1
+            sequence.save()
+            return f'RECEIPT-{str(sequence.last_number).zfill(3)}'

@@ -77,20 +77,20 @@ class Customer(ActiveModel, AuditModel):
         return f"{self.customer_code} - {self.name}"
     
     def get_balance(self):
-        """Calculate customer account balance."""
+        """Calculate customer account balance (amount owed by customer)."""
         from apps.invoicing.models import Invoice
-        from django.db.models import Sum, Q
         
-        invoices = Invoice.objects.filter(customer=self)
-        total_invoiced = invoices.aggregate(
-            total=Sum('total_amount')
-        )['total'] or 0
+        # Récupérer toutes les factures du client
+        invoices = self.invoices.all()
         
-        total_paid = invoices.aggregate(
-            total=Sum('paid_amount')
-        )['total'] or 0
+        # Calculer le solde pour chaque facture et sommer
+        balance = 0
+        for invoice in invoices:
+            invoice_balance = invoice.total_amount - invoice.paid_amount
+            if invoice_balance > 0:
+                balance += invoice_balance
         
-        return total_invoiced - total_paid
+        return balance
     
     def has_credit_available(self, amount):
         """Check if customer has enough credit available."""

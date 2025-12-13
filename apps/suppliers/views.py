@@ -10,7 +10,7 @@ from django.http import HttpResponse
 from django.utils import timezone
 import pandas as pd
 
-from django.contrib.auth import get_user_model
+from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
 from reportlab.lib import colors
@@ -20,32 +20,42 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from datetime import datetime
 import io
 
-from apps.accounts.models import User
-from apps.accounts.serializers import UserListSerializer, UserDetailSerializer
+from core.utils.export_utils import ExcelExporter
 from apps.suppliers.models import Supplier, SupplierPayment
-from apps.suppliers.serializers import SupplierPaymentSerializer
+from apps.suppliers.serializers import (
+    SupplierListSerializer,
+    SupplierDetailSerializer,
+    SupplierCreateUpdateSerializer,
+    SupplierPaymentSerializer
+)
+from apps.suppliers.filters import SupplierFilter
 
 
-class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
+class SupplierViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for suppliers (read-only).
-    Uses User model with is_supplier=True
-    Supports search and filtering via DjangoFilterBackend
+    ViewSet for Supplier management.
+    Supports full CRUD operations, search, filtering, import and export.
     """
-    permission_classes = []
+    queryset = Supplier.objects.filter(is_active=True)
+    permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active']
-    search_fields = ['supplier__name', 'supplier__supplier_code', 'supplier__email', 'supplier__city', 'first_name', 'email']
-    ordering_fields = ['supplier__name', 'supplier__supplier_code', 'created_at']
-    ordering = ['supplier__name']
-    
-    def get_queryset(self):
-        return User.objects.filter(is_supplier=True).select_related('supplier')
+    filterset_class = SupplierFilter
+    search_fields = ['supplier_code', 'name', 'contact_person', 'email', 'phone', 'mobile']
+    ordering_fields = ['name', 'supplier_code', 'created_at', 'rating', 'city']
+    ordering = ['name']
     
     def get_serializer_class(self):
+        """Return appropriate serializer based on action."""
         if self.action == 'list':
-            return UserListSerializer
-        return UserDetailSerializer
+            return SupplierListSerializer
+        elif self.action in ['create', 'update', 'partial_update']:
+            return SupplierCreateUpdateSerializer
+        return SupplierDetailSerializer
+    
+    def perform_destroy(self, instance):
+        """Soft delete: désactiver au lieu de supprimer."""
+        instance.is_active = False
+        instance.save()
     
     @action(detail=False, methods=['get'])
     def debts(self, request):
@@ -55,89 +65,192 @@ class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
         Retourne les fournisseurs liés à des PurchaseOrder avec un solde non réglé.
         Les données sont automatiquement filtrées par le tenant actuel (django-tenants).
         """
-        # Annoter les Suppliers avec total_ordered et total_paid depuis PurchaseOrders confirmées
-        # Utiliser output_field=DecimalField pour éviter les erreurs de type mixte
-        # Inclure les PO en status 'received' (réception automatique) et 'confirmed'
-        statuses = ['confirmed', 'received']
-        queryset = Supplier.objects.annotate(
-            total_ordered=Coalesce(
-                Sum('purchase_orders__total_amount', filter=Q(purchase_orders__status__in=statuses), output_field=DecimalField()), 
-                Value(0, output_field=DecimalField())
-            ),
-            total_paid=Coalesce(
-                Sum('purchase_orders__paid_amount', filter=Q(purchase_orders__status__in=statuses), output_field=DecimalField()), 
-                Value(0, output_field=DecimalField())
-            ),
-        ).annotate(
-            balance=F('total_ordered') - F('total_paid')
-        ).filter(balance__gt=0).order_by('-balance')
+        # Récupérer tous les fournisseurs et calculer leur balance via get_balance()
+        # Cette méthode filtre correctement les PO avec balance_due > 0 uniquement
+        suppliers = Supplier.objects.filter(is_active=True)
         
-        # Construire la réponse
-        data = [
-            {
-                'id': s.id,
-                'supplier_code': s.supplier_code,
-                'name': s.name,
-                'email': s.email,
-                'phone': s.phone,
-                'total_ordered': float(s.total_ordered or 0),
-                'total_paid': float(s.total_paid or 0),
-                'balance': float(s.balance or 0),
-            }
-            for s in queryset
-        ]
+        data = []
+        for supplier in suppliers:
+            balance = supplier.get_balance()
+            if balance > 0:
+                # Calculer total_ordered et total_paid pour les PO avec balance > 0
+                statuses = ['confirmed', 'received']
+                pos_with_debt = supplier.purchase_orders.filter(
+                    status__in=statuses
+                ).annotate(
+                    balance_calc=F('total_amount') - F('paid_amount')
+                ).filter(balance_calc__gt=0)
+                
+                total_ordered = sum(po.total_amount for po in pos_with_debt)
+                total_paid = sum(po.paid_amount for po in pos_with_debt)
+                
+                data.append({
+                    'id': supplier.id,
+                    'supplier_code': supplier.supplier_code,
+                    'name': supplier.name,
+                    'email': supplier.email,
+                    'phone': supplier.phone,
+                    'total_ordered': float(total_ordered),
+                    'total_paid': float(total_paid),
+                    'balance': float(balance),
+                })
+        
+        # Trier par balance décroissante
+        data.sort(key=lambda x: x['balance'], reverse=True)
         return Response(data)
 
+    
     @action(detail=False, methods=['get'])
     def export_excel(self, request):
-        """Export suppliers to Excel. Supports filtering via DjangoFilterBackend and SearchFilter."""
-        # Utiliser le queryset déjà filtré par les filtres (search, filters, etc.)
-        queryset = self.filter_queryset(self.get_queryset())
+        """Export suppliers to Excel with filters support."""
+        # Use filtered queryset
+        suppliers = self.filter_queryset(self.get_queryset())
         
-        # Préparer les données
-        data = []
-        for user in queryset:
-            supplier = user.supplier if hasattr(user, 'supplier') else None
-            data.append({
-                'Code': supplier.supplier_code if supplier else user.username,
-                'Nom': supplier.name if supplier else user.first_name,
-                'Email': supplier.email if supplier else user.email,
-                'Téléphone': supplier.phone if supplier else '',
-                'Mobile': supplier.mobile if supplier else '',
-                'Ville': supplier.city if supplier else '',
-                'Adresse': supplier.address if supplier else '',
-                'Actif': 'Oui' if user.is_active else 'Non',
-            })
+        wb, ws = ExcelExporter.create_workbook("Fournisseurs")
         
-        df = pd.DataFrame(data)
+        columns = [
+            'Code Fournisseur', 'Nom', 'Contact Principal', 'Email', 
+            'Téléphone', 'Mobile', 'Ville', 'Pays', 'Conditions Paiement',
+            'Évaluation', 'Solde Dû', 'Actif', 'Date Création'
+        ]
+        ExcelExporter.style_header(ws, columns)
         
-        # Générer Excel
-        response = HttpResponse(content_type='application/vnd.ms-excel')
+        for row_num, supplier in enumerate(suppliers, 2):
+            ws.cell(row=row_num, column=1, value=supplier.supplier_code)
+            ws.cell(row=row_num, column=2, value=supplier.name)
+            ws.cell(row=row_num, column=3, value=supplier.contact_person)
+            ws.cell(row=row_num, column=4, value=supplier.email)
+            ws.cell(row=row_num, column=5, value=supplier.phone)
+            ws.cell(row=row_num, column=6, value=supplier.mobile)
+            ws.cell(row=row_num, column=7, value=supplier.city)
+            ws.cell(row=row_num, column=8, value=supplier.country)
+            ws.cell(row=row_num, column=9, value=supplier.get_payment_term_display())
+            ws.cell(row=row_num, column=10, value=supplier.rating or '')
+            ws.cell(row=row_num, column=11, value=float(supplier.get_balance()))
+            ws.cell(row=row_num, column=12, value='Oui' if supplier.is_active else 'Non')
+            ws.cell(row=row_num, column=13, value=supplier.created_at.strftime('%d/%m/%Y'))
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
         filename = f"fournisseurs_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return ExcelExporter.generate_response(wb, filename)
+
+    @action(detail=False, methods=['post'])
+    def import_excel(self, request):
+        """Import suppliers from Excel file."""
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'Aucun fichier fourni'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
-        with pd.ExcelWriter(response, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name="Fournisseurs")
-            worksheet = writer.sheets["Fournisseurs"]
+        file = request.FILES['file']
+    
+        try:
+            df = pd.read_excel(file)
             
-            # Style header
-            for cell in worksheet[1]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+            # Required columns
+            required_columns = ['Nom']
+            missing_columns = [col for col in required_columns if col not in df.columns]
             
-            # Ajuster les largeurs
-            for col_num, col_title in enumerate(df.columns, 1):
-                col_letter = get_column_letter(col_num)
-                worksheet.column_dimensions[col_letter].width = 20
-        
-        return response
+            if missing_columns:
+                return Response(
+                    {'error': f'Colonnes manquantes: {", ".join(missing_columns)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            created_count = 0
+            updated_count = 0
+            errors = []
+
+            for index, row in df.iterrows():
+                try:
+                    name = str(row.get('Nom', '')).strip()
+                    if not name:
+                        errors.append(f"Ligne {index + 2}: Nom obligatoire")
+                        continue
+                    
+                    email = str(row.get('Email', '')).strip() if pd.notna(row.get('Email')) else ''
+                    phone = str(row.get('Téléphone', '')).strip() if pd.notna(row.get('Téléphone')) else ''
+                    supplier_code = str(row.get('Code Fournisseur', '')).strip() if pd.notna(row.get('Code Fournisseur')) else ''
+
+                    # Prepare supplier data
+                    supplier_data = {
+                        'name': name,
+                        'contact_person': str(row.get('Contact Principal', '')).strip() if pd.notna(row.get('Contact Principal')) else '',
+                        'email': email,
+                        'phone': phone,
+                        'mobile': str(row.get('Mobile', '')).strip() if pd.notna(row.get('Mobile')) else '',
+                        'website': str(row.get('Site Web', '')).strip() if pd.notna(row.get('Site Web')) else '',
+                        'address': str(row.get('Adresse', '')).strip() if pd.notna(row.get('Adresse')) else '',
+                        'city': str(row.get('Ville', '')).strip() if pd.notna(row.get('Ville')) else '',
+                        'postal_code': str(row.get('Code Postal', '')).strip() if pd.notna(row.get('Code Postal')) else '',
+                        'country': str(row.get('Pays', 'Cameroun')).strip() if pd.notna(row.get('Pays')) else 'Cameroun',
+                        'tax_id': str(row.get('Numéro Fiscal', '')).strip() if pd.notna(row.get('Numéro Fiscal')) else '',
+                        'bank_account': str(row.get('Compte Bancaire', '')).strip() if pd.notna(row.get('Compte Bancaire')) else '',
+                        'notes': str(row.get('Notes', '')).strip() if pd.notna(row.get('Notes')) else '',
+                    }
+                    
+                    # Handle rating
+                    if pd.notna(row.get('Évaluation')):
+                        try:
+                            rating = int(row.get('Évaluation'))
+                            if 1 <= rating <= 5:
+                                supplier_data['rating'] = rating
+                        except:
+                            pass
+                    
+                    # Handle payment term
+                    payment_term_map = {
+                        'Comptant': 'immediate',
+                        '15 jours': '15_days',
+                        '30 jours': '30_days',
+                        '60 jours': '60_days',
+                        '90 jours': '90_days',
+                    }
+                    payment_term_str = str(row.get('Conditions Paiement', '30 jours')).strip()
+                    supplier_data['payment_term'] = payment_term_map.get(payment_term_str, '30_days')
+
+                    # Create or update supplier
+                    if supplier_code and Supplier.objects.filter(supplier_code=supplier_code).exists():
+                        # Update existing supplier
+                        supplier = Supplier.objects.get(supplier_code=supplier_code)
+                        for key, value in supplier_data.items():
+                            setattr(supplier, key, value)
+                        supplier.save()
+                        updated_count += 1
+                    else:
+                        # Create new supplier
+                        if not supplier_code:
+                            # Auto-generate code
+                            count = Supplier.objects.count() + created_count + 1
+                            supplier_code = f"FRN{count:05d}"
+                        
+                        supplier_data['supplier_code'] = supplier_code
+                        Supplier.objects.create(**supplier_data)
+                        created_count += 1
+
+                except Exception as e:
+                    errors.append(f"Ligne {index + 2}: {str(e)}")
+            
+            return Response({
+                'message': 'Import terminé',
+                'created': created_count,
+                'updated': updated_count,
+                'errors': errors
+            })
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Erreur lors de l\'import: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
     @action(detail=False, methods=['get'])
     def export_pdf(self, request):
-        """Export suppliers to PDF. Supports filtering via DjangoFilterBackend and SearchFilter."""
-        # Utiliser le queryset déjà filtré par les filtres (search, filters, etc.)
-        queryset = self.filter_queryset(self.get_queryset())
+        """Export suppliers to PDF with filters support."""
+        # Use filtered queryset
+        suppliers = self.filter_queryset(self.get_queryset())
         
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -181,15 +294,14 @@ class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Données tableau
         data = [['Code', 'Nom', 'Email', 'Téléphone', 'Ville', 'Actif']]
-        for user in queryset:
-            supplier = user.supplier if hasattr(user, 'supplier') else None
+        for supplier in suppliers:
             row = [
-                supplier.supplier_code if supplier else user.username,
-                supplier.name if supplier else user.first_name,
-                supplier.email if supplier else user.email,
-                supplier.phone if supplier else '',
-                supplier.city if supplier else '',
-                'Oui' if user.is_active else 'Non'
+                supplier.supplier_code,
+                supplier.name,
+                supplier.email,
+                supplier.phone,
+                supplier.city,
+                'Oui' if supplier.is_active else 'Non'
             ]
             data.append(row)
         
@@ -213,7 +325,7 @@ class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Stats
         elements.append(Spacer(1, 20))
-        stats_text = f"Total: {queryset.count()} fournisseur(s) | Actifs: {queryset.filter(is_active=True).count()}"
+        stats_text = f"Total: {suppliers.count()} fournisseur(s) | Actifs: {suppliers.filter(is_active=True).count()}"
         stats = Paragraph(stats_text, date_style)
         elements.append(stats)
         
@@ -225,124 +337,6 @@ class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         
         return response
-    
-
-
-
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
-    def import_excel(self, request):
-        """Import suppliers from Excel."""
-        User = get_user_model()
-        if 'file' not in request.FILES:
-            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        file = request.FILES['file']
-    
-        try:
-            df = pd.read_excel(file)
-            
-            # ✅ Seuls "Nom" et "Téléphone" sont obligatoires
-            required_columns = ['Nom', 'Téléphone']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            
-            if missing_columns:
-                return Response(
-                    {'error': f'Colonnes manquantes: {", ".join(missing_columns)}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            created_count = 0
-            updated_count = 0
-            errors = []
-
-            for index, row in df.iterrows():
-                try:
-                    nom = str(row.get('Nom', '')).strip()
-                    phone = str(row.get('Téléphone', '')).strip()
-                    email = str(row.get('Email', '')).strip() if 'Email' in df.columns else ''
-
-                    # --- USER ---
-                    base_username = nom or phone or f"user{index+1}"
-                    username = base_username
-                    counter = 1
-                    while User.objects.filter(username=username).exists():
-                        username = f"{base_username}{counter}"
-                        counter += 1
-
-                    # --- USER ---
-                    user_defaults = {
-                        'username': username,
-                        'first_name': row.get('Contact', ''),  # si tu veux stocker le contact
-                        'last_name': nom,
-                        'email': email,
-                        'is_supplier': True,  # ⚡ si tu as ce champ dans User
-                        'phone': phone,
-                    }
-
-                    if email:
-                        user, created_user = User.objects.update_or_create(
-                            email=email,
-                            defaults=user_defaults
-                        )
-                    else:
-                        user, created_user = User.objects.update_or_create(
-                            username=username,
-                            defaults=user_defaults
-                        )
-
-                    if created_user:
-                        user.set_password('password123')  # mot de passe par défaut
-                        user.save()
-
-                    # --- SUPPLIER ---
-                    supplier_defaults = {
-                        'name': nom,
-                        'contact_person': row.get('Contact', ''),
-                        'email': email,
-                        'phone': phone,
-                        'mobile': row.get('Mobile', ''),
-                        'website': row.get('Site web', ''),
-                        'address': row.get('Adresse', ''),
-                        'city': row.get('Ville', ''),
-                        'postal_code': row.get('Code postal', ''),
-                        'country': row.get('Pays', 'Cameroun'),
-                        'tax_id': row.get('Numéro fiscal', ''),
-                        'bank_account': row.get('Compte bancaire', ''),
-                        'payment_term': row.get('Conditions de paiement', '30_days'),
-                        'rating': row.get('Évaluation', None),
-                        'notes': row.get('Notes', ''),
-                    }
-
-                    Supplier.objects.update_or_create(
-                        user=user,
-                        defaults=supplier_defaults
-                    )
-
-                    created_count += 1 if created_user else 0
-                    updated_count += 0 if created_user else 1
-
-                except Exception as e:
-                    errors.append(f"Ligne {index + 2}: {str(e)}")
-            
-            return Response({
-                'message': 'Import terminé',
-                'created': created_count,
-                'updated': updated_count,
-                'errors': errors
-            })
-            
-        except Exception as e:
-            return Response(
-                {'error': f'Erreur lors de l\'import: {str(e)}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-
-
-
-
-
-
 
 
 class SupplierPaymentViewSet(viewsets.ModelViewSet):
@@ -351,10 +345,23 @@ class SupplierPaymentViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierPaymentSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ['get', 'post', 'head', 'options']
+    filterset_fields = ['supplier', 'payment_method', 'payment_date']
+    ordering_fields = ['payment_date', 'amount', 'created_at']
+    ordering = ['-payment_date']
+    pagination_class = None  # Désactiver la pagination pour avoir tous les paiements
 
     def get_queryset(self):
-        """Return payments for current tenant (django-tenants handles schema isolation)."""
-        return SupplierPayment.objects.all()
+        """Return payments for current tenant with optional filters."""
+        queryset = SupplierPayment.objects.select_related(
+            'supplier', 'purchase_order', 'created_by'
+        ).all()
+        
+        # Filter by supplier if provided
+        supplier_id = self.request.query_params.get('supplier')
+        if supplier_id:
+            queryset = queryset.filter(supplier_id=supplier_id)
+        
+        return queryset
 
     def perform_create(self, serializer):
         """Create payment and attach current user as creator."""

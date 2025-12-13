@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 
@@ -32,9 +33,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         """Approve an expense."""
         expense = self.get_object()
         
-        if expense.status != 'pending':
+        # Autoriser l'approbation depuis draft ou pending
+        if expense.status not in ['pending', 'draft']:
             return Response(
-                {'error': 'Seules les dépenses en attente peuvent être approuvées.'},
+                {'error': 'Seules les dépenses en brouillon ou en attente peuvent être approuvées.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -51,9 +53,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         """Reject an expense."""
         expense = self.get_object()
         
-        if expense.status != 'pending':
+        # Autoriser le rejet depuis draft ou pending
+        if expense.status not in ['pending', 'draft']:
             return Response(
-                {'error': 'Seules les dépenses en attente peuvent être rejetées.'},
+                {'error': 'Seules les dépenses en brouillon ou en attente peuvent être rejetées.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -83,11 +86,56 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(expense)
         return Response(serializer.data)
     
-    @extend_schema(summary="Exporter les dépenses en Excel", tags=["Expenses"])
     @action(detail=False, methods=['get'])
     def export_excel(self, request):
         """Export expenses to Excel."""
         expenses = self.filter_queryset(self.get_queryset())
+        
+        wb, ws = ExcelExporter.create_workbook("Dépenses")
+        
+        columns = [
+            'N° Dépense', 'Date', 'Catégorie', 'Bénéficiaire',
+            'Montant', 'Statut', 'Date Paiement', 'Mode Paiement'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, expense in enumerate(expenses, 2):
+            ws.cell(row=row_num, column=1, value=expense.expense_number)
+            ws.cell(row=row_num, column=2, value=expense.expense_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=3, value=expense.category.name)
+            ws.cell(row=row_num, column=4, value=expense.beneficiary)
+            ws.cell(row=row_num, column=5, value=float(expense.amount))
+            ws.cell(row=row_num, column=6, value=expense.get_status_display())
+            ws.cell(row=row_num, column=7, value=expense.payment_date.strftime('%d/%m/%Y') if expense.payment_date else 'N/A')
+            ws.cell(row=row_num, column=8, value=expense.get_payment_method_display() if expense.payment_method else 'N/A')
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"depenses_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+
+
+class ExpenseExportExcelView(APIView):
+    """Vue pour exporter les dépenses en Excel."""
+    
+    def get(self, request):
+        """Export expenses to Excel."""
+        expenses = Expense.objects.select_related('category', 'store').all()
+        
+        # Appliquer les filtres si présents
+        category = request.query_params.get('category')
+        status_filter = request.query_params.get('status')
+        date_from = request.query_params.get('expense_date__gte')
+        date_to = request.query_params.get('expense_date__lte')
+        
+        if category:
+            expenses = expenses.filter(category_id=category)
+        if status_filter:
+            expenses = expenses.filter(status=status_filter)
+        if date_from:
+            expenses = expenses.filter(expense_date__gte=date_from)
+        if date_to:
+            expenses = expenses.filter(expense_date__lte=date_to)
         
         wb, ws = ExcelExporter.create_workbook("Dépenses")
         

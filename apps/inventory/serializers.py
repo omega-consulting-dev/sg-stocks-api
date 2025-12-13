@@ -75,6 +75,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     store_name = serializers.CharField(source='store.name', read_only=True)
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    customer_name = serializers.SerializerMethodField(read_only=True)
     destination_store_name = serializers.CharField(
         source='destination_store.name',
         read_only=True
@@ -87,26 +88,92 @@ class StockMovementSerializer(serializers.ModelSerializer):
         source='created_by.get_full_name',
         read_only=True
     )
+    
+    def get_customer_name(self, obj):
+        """Retrieve customer name from related Invoice for 'out' movements."""
+        if obj.invoice and obj.invoice.customer:
+            return obj.invoice.customer.name
+        return None
+    
+    # Read-only payment info fields (retrieved from related PurchaseOrder and SupplierPayment)
+    payment_info = serializers.SerializerMethodField(read_only=True)
+    
     # Optional: allow passing a purchase_order_number to link/create a PO
     purchase_order_number = serializers.CharField(write_only=True, required=False, allow_null=True)
     # Debt / payment handling
+    invoice_amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        help_text="Montant total de la facture"
+    )
     is_debt = serializers.BooleanField(write_only=True, required=False, default=False)
     due_date = serializers.DateField(write_only=True, required=False, allow_null=True)
-    payment_amount = serializers.DecimalField(write_only=True, required=False, max_digits=12, decimal_places=2)
+    payment_amount = serializers.DecimalField(
+        write_only=True,
+        required=False,
+        max_digits=12,
+        decimal_places=2,
+        help_text="Montant versé au fournisseur (obligatoire pour les entrées en stock)"
+    )
     payment_date = serializers.DateField(write_only=True, required=False, allow_null=True)
     payment_method = serializers.CharField(write_only=True, required=False, allow_blank=True, default='')
+    
+    def get_payment_info(self, obj):
+        """Retrieve payment information from related PurchaseOrder."""
+        # Utiliser invoice_amount du modèle (saisi par l'utilisateur)
+        invoice_amount = float(obj.invoice_amount) if obj.invoice_amount else None
+        
+        if obj.purchase_order:
+            po = obj.purchase_order
+            # Get the latest payment for this purchase order
+            latest_payment = po.payments.order_by('-payment_date').first()
+            
+            return {
+                'invoice_amount': invoice_amount,
+                'payment_amount': float(latest_payment.amount) if latest_payment else None,
+                'payment_date': latest_payment.payment_date.isoformat() if latest_payment else None,
+                'payment_method': latest_payment.payment_method if latest_payment else None,
+                'due_date': po.due_date.isoformat() if po.due_date else None,
+            }
+        
+        # Retourner les informations même sans PurchaseOrder
+        return {
+            'invoice_amount': invoice_amount,
+            'payment_amount': None,
+            'payment_date': None,
+            'payment_method': None,
+            'due_date': None,
+        }
 
     class Meta:
         model = StockMovement
         fields = [
             'id', 'product', 'product_name', 'store', 'store_name',
-            'movement_type', 'movement_type_display','supplier', 'supplier_name','unit_cost', 'quantity',
-            'reference', 'destination_store', 'destination_store_name',
-            'purchase_order', 'purchase_order_number',
+            'movement_type', 'movement_type_display','supplier', 'supplier_name', 'customer_name', 'unit_cost', 'quantity',
+            'total_value', 'invoice_amount', 'receipt_number', 'reference', 'destination_store', 'destination_store_name',
+            'purchase_order', 'purchase_order_number', 'invoice', 'payment_info',
             'is_debt', 'due_date', 'payment_amount', 'payment_date', 'payment_method',
             'notes', 'created_at', 'created_by', 'created_by_name'
         ]
-        read_only_fields = ['created_at', 'created_by', 'created_by_name']
+        read_only_fields = ['created_at', 'created_by', 'created_by_name', 'customer_name', 'payment_info']
+    
+    def update(self, instance, validated_data):
+        """Handle update of stock movement."""
+        # Pop write-only fields
+        validated_data.pop('purchase_order_number', None)
+        validated_data.pop('is_debt', None)
+        validated_data.pop('due_date', None)
+        validated_data.pop('payment_amount', None)
+        validated_data.pop('payment_date', None)
+        validated_data.pop('payment_method', None)
+        
+        # Update the instance
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
     
     def validate_supplier(self, value):
         """Vérifier que le fournisseur existe."""
@@ -133,6 +200,9 @@ class StockMovementSerializer(serializers.ModelSerializer):
         destination_store = data.get('destination_store')
         store = data.get('store')
         purchase_order_number = data.get('purchase_order_number')
+        payment_amount = data.get('payment_amount')
+        product = data.get('product')
+        quantity = data.get('quantity')
         
         # Fournisseur obligatoire pour les entrées
         if movement_type == 'in' and not supplier:
@@ -143,6 +213,39 @@ class StockMovementSerializer(serializers.ModelSerializer):
                     'dans le module Fournisseurs.'
                 )
             })
+        
+        # Montant versé obligatoire pour les entrées en stock
+        if movement_type == 'in' and payment_amount is None:
+            raise serializers.ValidationError({
+                'payment_amount': (
+                    'Le montant versé est obligatoire pour les entrées en stock. '
+                    'Indiquez 0 si aucun paiement n\'a été effectué (dette totale) '
+                    'ou le montant exact versé au fournisseur.'
+                )
+            })
+        
+        # Vérifier la quantité disponible pour les sorties et transferts
+        if movement_type in ['out', 'transfer'] and product and store and quantity:
+            try:
+                stock = Stock.objects.get(product=product, store=store)
+                available_quantity = stock.quantity - (stock.reserved_quantity or 0)
+                
+                if quantity > available_quantity:
+                    raise serializers.ValidationError({
+                        'quantity': (
+                            f'Quantité insuffisante en stock. '
+                            f'Disponible: {available_quantity}, '
+                            f'Demandé: {quantity}. '
+                            f'Produit: {product.name}, Magasin: {store.name}.'
+                        )
+                    })
+            except Stock.DoesNotExist:
+                raise serializers.ValidationError({
+                    'product': (
+                        f'Le produit "{product.name}" n\'existe pas dans le magasin "{store.name}". '
+                        f'Quantité disponible: 0. Impossible de faire une sortie ou un transfert.'
+                    )
+                })
 
         # If purchase_order_number provided, ensure it's a non-empty string
         if purchase_order_number is not None and purchase_order_number == '':
@@ -169,6 +272,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
     def create(self, validated_data, **kwargs):
         # Pop payment/debt related write-only fields so they are not passed to StockMovement
         purchase_order_number = validated_data.pop('purchase_order_number', None)
+        invoice_amount_value = validated_data.get('invoice_amount')  # Garder invoice_amount dans validated_data
         payment_amount = validated_data.pop('payment_amount', None)
         payment_date = validated_data.pop('payment_date', None)
         payment_method = validated_data.pop('payment_method', '')
@@ -188,16 +292,48 @@ class StockMovementSerializer(serializers.ModelSerializer):
             qty_dec = None
 
         po = None
-        if purchase_order_number:
+        supplier = validated_data.get('supplier')
+        movement_type = validated_data.get('movement_type')
+        
+        # Créer automatiquement un PurchaseOrder pour les entrées en stock avec fournisseur
+        if movement_type == 'in' and supplier:
             with transaction.atomic():
-                supplier = validated_data.get('supplier')
                 store = validated_data.get('store')
-
-                try:
-                    po = PurchaseOrder.objects.get(order_number=purchase_order_number)
-                except PurchaseOrder.DoesNotExist:
-                    # Create a minimal PurchaseOrder with Decimal fields
-                    total_amt = (unit_dec * qty_dec) if unit_dec is not None and qty_dec is not None else Decimal('0')
+                
+                # Si un purchase_order_number est fourni, essayer de le récupérer
+                if purchase_order_number:
+                    try:
+                        po = PurchaseOrder.objects.get(order_number=purchase_order_number)
+                    except PurchaseOrder.DoesNotExist:
+                        # Créer avec le numéro fourni
+                        pass
+                
+                # Si pas de PO trouvé, en créer un nouveau
+                if not po:
+                    # Générer un numéro automatique si non fourni
+                    if not purchase_order_number:
+                        last_po = PurchaseOrder.objects.filter(
+                            order_number__startswith='PO-'
+                        ).order_by('-order_number').first()
+                        
+                        if last_po and last_po.order_number.startswith('PO-'):
+                            try:
+                                last_num = int(last_po.order_number.split('-')[1])
+                                purchase_order_number = f'PO-{str(last_num + 1).zfill(6)}'
+                            except:
+                                purchase_order_number = f'PO-{timezone.now().strftime("%Y%m%d%H%M%S")}'
+                        else:
+                            purchase_order_number = f'PO-000001'
+                    
+                    # Créer le PurchaseOrder
+                    # Utiliser invoice_amount si fourni, sinon calculer depuis unit_cost * quantity
+                    if invoice_amount_value:
+                        total_amt = Decimal(str(invoice_amount_value))
+                    elif unit_dec is not None and qty_dec is not None:
+                        total_amt = unit_dec * qty_dec
+                    else:
+                        total_amt = Decimal('0')
+                    
                     po = PurchaseOrder.objects.create(
                         order_number=purchase_order_number,
                         supplier=supplier,
@@ -211,7 +347,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
                         due_date=due_date or None,
                     )
 
-                    # Create a PurchaseOrderLine for the product if info available
+                    # Créer une ligne de commande pour le produit
                     try:
                         PurchaseOrderLine.objects.create(
                             purchase_order=po,
@@ -222,12 +358,12 @@ class StockMovementSerializer(serializers.ModelSerializer):
                     except Exception:
                         pass
 
-                # If PO exists and due_date provided, update it
+                # Mettre à jour la date d'échéance si fournie
                 if po and due_date:
                     po.due_date = due_date
                     po.save()
 
-                # If payment info provided, create SupplierPayment and update PO.paid_amount
+                # Enregistrer le paiement si un montant est fourni
                 if payment_amount:
                     try:
                         pay_amt = Decimal(str(payment_amount))
@@ -244,10 +380,9 @@ class StockMovementSerializer(serializers.ModelSerializer):
                         reference=validated_data.get('reference', ''),
                     )
 
-                    po.paid_amount = (po.paid_amount or Decimal('0')) + pay_amt
-                    po.save()
+                    # Note: paid_amount sera mis à jour automatiquement par le signal update_purchase_order_paid_amount
 
-                # attach PO to movement data
+                # Attacher le PurchaseOrder au mouvement de stock
                 validated_data['purchase_order'] = po
 
         # Attach created_by if passed from view.perform_create
@@ -278,14 +413,19 @@ class StockTransferListSerializer(serializers.ModelSerializer):
     destination_store_name = serializers.CharField(source='destination_store.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     lines_count = serializers.IntegerField(source='lines.count', read_only=True)
+    products = serializers.SerializerMethodField(read_only=True)
     
     class Meta:
         model = StockTransfer
         fields = [
             'id', 'transfer_number', 'source_store', 'source_store_name',
             'destination_store', 'destination_store_name', 'status',
-            'status_display', 'transfer_date', 'lines_count', 'created_at'
+            'status_display', 'transfer_date', 'lines_count', 'products', 'created_at'
         ]
+    
+    def get_products(self, obj):
+        """Get list of product names in this transfer."""
+        return list(obj.lines.values_list('product__name', flat=True))
 
 
 class StockTransferDetailSerializer(serializers.ModelSerializer):
@@ -319,6 +459,42 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
             'source_store', 'destination_store', 'transfer_date',
             'expected_arrival', 'notes', 'lines'
         ]
+    
+    def validate(self, data):
+        """Valider que les quantités demandées sont disponibles."""
+        source_store = data.get('source_store')
+        lines_data = data.get('lines', [])
+        
+        errors = []
+        for idx, line_data in enumerate(lines_data):
+            product = line_data.get('product')
+            quantity_requested = line_data.get('quantity_requested', 0)
+            
+            if product and source_store and quantity_requested > 0:
+                try:
+                    stock = Stock.objects.get(product=product, store=source_store)
+                    available = stock.quantity - (stock.reserved_quantity or 0)
+                    
+                    if quantity_requested > available:
+                        errors.append(
+                            f"Ligne {idx + 1}: {product.name} - "
+                            f"Disponible: {available}, Demandé: {quantity_requested}"
+                        )
+                except Stock.DoesNotExist:
+                    errors.append(
+                        f"Ligne {idx + 1}: {product.name} - "
+                        f"Produit non disponible dans le magasin source (stock = 0)"
+                    )
+        
+        if errors:
+            raise serializers.ValidationError({
+                'lines': [
+                    'Stock insuffisant pour le transfert:',
+                    *errors
+                ]
+            })
+        
+        return data
     
     def create(self, validated_data):
         lines_data = validated_data.pop('lines')

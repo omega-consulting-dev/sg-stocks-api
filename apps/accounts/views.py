@@ -27,6 +27,7 @@ from apps.accounts.serializers import (
     UserActivitySerializer,
     UserStatsSerializer,
 )
+from apps.accounts.serializers_permissions import UserMeSerializer
 from apps.accounts.filters import UserFilter
 from apps.accounts.permissions import IsAdminOrManager
 
@@ -79,8 +80,6 @@ class UserViewSet(viewsets.ModelViewSet):
     filterset_class = UserFilter
     search_fields = [
         'username', 'email', 'first_name', 'last_name',
-        'customer_code', 'customer_company_name',
-        'supplier_code', 'supplier_company_name',
         'employee_id'
     ]
     ordering_fields = ['date_joined', 'username', 'last_name', 'email']
@@ -110,7 +109,7 @@ class UserViewSet(viewsets.ModelViewSet):
             return queryset
         
         # Manager voit tout dans son tenant
-        if user.role and user.role.access_scope == 'all':
+        if hasattr(user, 'role') and user.role and user.role.access_scope == 'all':
             return queryset
         
         # Les autres ne voient que les utilisateurs des magasins assignés
@@ -130,13 +129,13 @@ class UserViewSet(viewsets.ModelViewSet):
     
     @extend_schema(
         summary="Profil de l'utilisateur connecté",
-        description="Récupère le profil de l'utilisateur actuellement connecté.",
+        description="Récupère le profil de l'utilisateur actuellement connecté avec toutes les permissions.",
         tags=["Utilisateurs"]
     )
     @action(detail=False, methods=['get'])
     def me(self, request):
-        """Get current user profile."""
-        serializer = UserDetailSerializer(request.user, context={'request': request})
+        """Get current user profile with permissions."""
+        serializer = UserMeSerializer(request.user, context={'request': request})
         return Response(serializer.data)
     
     @extend_schema(
@@ -254,44 +253,6 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
     
     @extend_schema(
-        summary="Clients uniquement",
-        description="Récupère la liste des clients uniquement.",
-        tags=["Utilisateurs"]
-    )
-    @action(detail=False, methods=['get'])
-    def customers(self, request):
-        """Get only customers."""
-        queryset = self.filter_queryset(
-            self.get_queryset().filter(is_customer=True)
-        )
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-    
-    @extend_schema(
-        summary="Fournisseurs uniquement",
-        description="Récupère la liste des fournisseurs uniquement.",
-        tags=["Utilisateurs"]
-    )
-    @action(detail=False, methods=['get'])
-    def suppliers(self, request):
-        """Get only suppliers."""
-        queryset = self.filter_queryset(
-            self.get_queryset().filter(is_supplier=True)
-        )
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
-    
-    @extend_schema(
         summary="Statistiques des utilisateurs",
         description="Récupère les statistiques globales des utilisateurs.",
         tags=["Utilisateurs"]
@@ -304,9 +265,7 @@ class UserViewSet(viewsets.ModelViewSet):
         stats = {
             'total_users': User.objects.count(),
             'active_users': User.objects.filter(is_active=True).count(),
-            'collaborators': User.objects.filter(is_collaborator=True).count(),
-            'customers': User.objects.filter(is_customer=True).count(),
-            'suppliers': User.objects.filter(is_supplier=True).count(),
+            'staff_users': User.objects.filter(is_staff=True).count(),
             'new_users_this_month': User.objects.filter(
                 date_joined__gte=one_month_ago
             ).count(),

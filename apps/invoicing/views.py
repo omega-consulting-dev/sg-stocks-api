@@ -2,6 +2,7 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -27,16 +28,62 @@ from apps.invoicing.serializers import (
     create=extend_schema(summary="Créer une facture", tags=["Invoicing"]),
 )
 class InvoiceViewSet(viewsets.ModelViewSet):
-    """ViewSet for Invoice model."""
+    """
+    ViewSet for Invoice model with secure store-based filtering.
+    - Super admin: voit toutes les factures
+    - Manager (access_scope='all'): voit toutes les factures
+    - Caissier/autres (access_scope='assigned'): voit uniquement les factures de leurs stores assignés
+    - Utilisateur (access_scope='own'): voit uniquement ses propres factures créées
+    """
     
-    queryset = Invoice.objects.select_related('customer', 'sale').prefetch_related('lines', 'payments')
+    queryset = Invoice.objects.select_related('customer', 'store', 'sale').prefetch_related('lines', 'payments')
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'invoicing'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['customer', 'status', 'invoice_date']
-    search_fields = ['invoice_number', 'customer__username']
+    filterset_fields = ['customer', 'store', 'status', 'invoice_date']
+    search_fields = ['invoice_number', 'customer__name', 'customer__email', 'customer__customer_code']
     ordering_fields = ['invoice_date', 'due_date', 'total_amount']
     ordering = ['-invoice_date']
+    
+    def get_queryset(self):
+        """
+        Filtrage sécurisé des factures selon le rôle et les stores assignés.
+        Assure qu'un utilisateur ne peut voir que les données auxquelles il a accès.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            return queryset
+        
+        # Vérifier le scope d'accès du rôle
+        if hasattr(user, 'role') and user.role:
+            # Manager avec accès à tous les stores
+            if user.role.access_scope == 'all':
+                return queryset
+            
+            # Utilisateur avec accès uniquement aux stores assignés
+            elif user.role.access_scope == 'assigned':
+                # Filtrer par stores assignés à l'utilisateur
+                assigned_stores = user.assigned_stores.all()
+                if assigned_stores.exists():
+                    return queryset.filter(store__in=assigned_stores)
+                else:
+                    # Si aucun store assigné, retourner queryset vide
+                    return queryset.none()
+            
+            # Utilisateur avec accès uniquement à ses propres données
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        # Par défaut, filtrer par stores assignés (sécurité)
+        assigned_stores = user.assigned_stores.all()
+        if assigned_stores.exists():
+            return queryset.filter(store__in=assigned_stores)
+        
+        # Si aucun rôle et aucun store, pas d'accès
+        return queryset.none()
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -45,8 +92,46 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             return InvoiceCreateSerializer
         return InvoiceDetailSerializer
     
+    def create(self, request, *args, **kwargs):
+        """Override create to return detailed invoice after creation."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        
+        # Return detailed serializer with all fields including id
+        invoice = serializer.instance
+        detail_serializer = InvoiceDetailSerializer(invoice)
+        headers = self.get_success_headers(detail_serializer.data)
+        return Response(detail_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        """
+        Validation lors de la création:
+        - Si store non fourni, utiliser le premier store assigné de l'utilisateur
+        - Vérifier que l'utilisateur a accès au store spécifié
+        """
+        user = self.request.user
+        store = serializer.validated_data.get('store')
+        
+        # Si pas de store fourni, utiliser le premier store assigné
+        if not store:
+            assigned_stores = user.assigned_stores.all()
+            if assigned_stores.exists():
+                serializer.validated_data['store'] = assigned_stores.first()
+            else:
+                raise ValidationError({
+                    'store': 'Aucun point de vente assigné. Veuillez spécifier un store.'
+                })
+        else:
+            # Vérifier que l'utilisateur a accès à ce store (sauf super admin)
+            if not user.is_superuser:
+                if hasattr(user, 'role') and user.role and user.role.access_scope != 'all':
+                    if not user.assigned_stores.filter(id=store.id).exists():
+                        raise ValidationError({
+                            'store': 'Vous n\'avez pas accès à ce point de vente.'
+                        })
+        
+        serializer.save(created_by=user)
     
     @extend_schema(summary="Envoyer une facture par email", tags=["Invoicing"])
     @action(detail=True, methods=['post'])
@@ -164,7 +249,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         for row_num, invoice in enumerate(invoices, 2):
             ws.cell(row=row_num, column=1, value=invoice.invoice_number)
-            ws.cell(row=row_num, column=2, value=invoice.customer.get_display_name() if invoice.customer else '')
+            ws.cell(row=row_num, column=2, value=invoice.customer.name if invoice.customer else '')
             ws.cell(row=row_num, column=3, value=invoice.invoice_date.strftime('%Y-%m-%d'))
             ws.cell(row=row_num, column=4, value=invoice.due_date.strftime('%Y-%m-%d'))
             ws.cell(row=row_num, column=5, value=float(invoice.total_amount))
@@ -222,7 +307,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         for invoice in invoices:
             data.append([
                 invoice.invoice_number,
-                invoice.customer.get_display_name() if invoice.customer else '',
+                invoice.customer.name if invoice.customer else '',
                 invoice.invoice_date.strftime('%d/%m/%Y'),
                 f"{float(invoice.total_amount):,.0f}",
                 invoice.get_status_display()
@@ -272,7 +357,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         for invoice in invoices:
             writer.writerow([
                 invoice.invoice_number,
-                invoice.customer.get_display_name() if invoice.customer else '',
+                invoice.customer.name if invoice.customer else '',
                 invoice.invoice_date.strftime('%Y-%m-%d'),
                 invoice.due_date.strftime('%Y-%m-%d'),
                 f"{float(invoice.total_amount):,.2f}",
@@ -308,11 +393,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
 @extend_schema_view(
     list=extend_schema(summary="Liste des paiements", tags=["Invoicing"]),
+    create=extend_schema(summary="Créer un paiement", tags=["Invoicing"]),
 )
-class InvoicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
-    """ViewSet for InvoicePayment model (read-only)."""
+class InvoicePaymentViewSet(viewsets.ModelViewSet):
+    """ViewSet for InvoicePayment model."""
     
-    queryset = InvoicePayment.objects.select_related('invoice', 'created_by')
+    queryset = InvoicePayment.objects.select_related('invoice')
     serializer_class = InvoicePaymentSerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'invoicing'
