@@ -4,9 +4,11 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
 from apps.main.views import RegisterView, LoginView
 from apps.main.views_settings import CompanySettingsViewSet
+from core.views import NotificationViewSet
 
 router = DefaultRouter()
 router.register(r'settings', CompanySettingsViewSet, basename='company-settings')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),

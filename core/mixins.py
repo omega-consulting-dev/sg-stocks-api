@@ -158,3 +158,79 @@ class UserStoreValidationMixin:
                         )
         
         serializer.save(updated_by=user)
+
+
+class StoreAssignmentMixin:
+    """
+    Mixin pour auto-assigner le magasin par défaut pour les utilisateurs restreints.
+    Les utilisateurs admin peuvent sélectionner n'importe quel magasin.
+    Les utilisateurs restreints (magasinier, caissier) sont automatiquement assignés à leur magasin.
+    """
+    
+    def get_serializer_context(self):
+        """
+        Ajouter l'information de restriction de magasin au contexte du serializer.
+        """
+        context = super().get_serializer_context()
+        user = self.request.user
+        
+        context['is_store_restricted'] = user.is_store_restricted() if hasattr(user, 'is_store_restricted') else False
+        context['default_store'] = user.get_default_store() if hasattr(user, 'get_default_store') else None
+        
+        return context
+    
+    def perform_create(self, serializer):
+        """
+        Auto-assigner le magasin par défaut pour les utilisateurs restreints lors de la création.
+        """
+        user = self.request.user
+        
+        # Vérifier si l'utilisateur est restreint à un magasin
+        if hasattr(user, 'is_store_restricted') and user.is_store_restricted():
+            # Si le store n'est pas fourni, utiliser le magasin par défaut
+            if 'store' not in serializer.validated_data or serializer.validated_data.get('store') is None:
+                default_store = user.get_default_store()
+                if default_store:
+                    serializer.validated_data['store'] = default_store
+                else:
+                    raise PermissionDenied(
+                        "Vous devez être assigné à un magasin pour effectuer cette action. "
+                        "Contactez votre administrateur."
+                    )
+            else:
+                # Si un store est fourni, valider que l'utilisateur y a accès
+                provided_store = serializer.validated_data.get('store')
+                if provided_store not in user.assigned_stores.all():
+                    raise PermissionDenied(
+                        f"Vous n'avez pas accès au magasin '{provided_store.name}'. "
+                        f"Contactez votre administrateur."
+                    )
+        
+        # Appeler le parent s'il existe
+        if hasattr(super(), 'perform_create'):
+            super().perform_create(serializer)
+        else:
+            serializer.save(created_by=user)
+    
+    def perform_update(self, serializer):
+        """
+        Valider l'accès au magasin pour les utilisateurs restreints lors de la modification.
+        """
+        user = self.request.user
+        
+        # Vérifier si l'utilisateur est restreint à un magasin
+        if hasattr(user, 'is_store_restricted') and user.is_store_restricted():
+            # Si un nouveau store est fourni, valider l'accès
+            if 'store' in serializer.validated_data:
+                new_store = serializer.validated_data.get('store')
+                if new_store and new_store not in user.assigned_stores.all():
+                    raise PermissionDenied(
+                        f"Vous n'avez pas accès au magasin '{new_store.name}'. "
+                        f"Contactez votre administrateur."
+                    )
+        
+        # Appeler le parent s'il existe
+        if hasattr(super(), 'perform_update'):
+            super().perform_update(serializer)
+        else:
+            serializer.save(updated_by=user)

@@ -95,9 +95,16 @@ class CustomerCreateUpdateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """Auto-generate customer code if not provided."""
         if not validated_data.get('customer_code'):
-            # Generate unique customer code
-            last_customer = Customer.objects.order_by('-id').first()
-            next_id = (last_customer.id + 1) if last_customer else 1
+            # Generate unique customer code using GLOBAL count (not filtered by user)
+            # This ensures caissiers don't generate duplicate codes
+            from django.db import connection
+            
+            # Use raw query to bypass any tenant/user filtering
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT MAX(id) FROM customers_customer")
+                result = cursor.fetchone()
+                next_id = (result[0] + 1) if result[0] else 1
+            
             validated_data['customer_code'] = f"CLI{next_id:05d}"
             
             # Ensure uniqueness in case of concurrent requests

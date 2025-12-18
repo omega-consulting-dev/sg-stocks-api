@@ -126,6 +126,24 @@ AUTHENTICATION_BACKENDS = (
 ROOT_URLCONF = 'myproject.urls'
 
 WSGI_APPLICATION = 'myproject.wsgi.application'
+ASGI_APPLICATION = 'myproject.asgi.application'
+
+# Channels - Using InMemory for development (Redis not available on Windows)
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    },
+}
+
+# Pour production avec Redis, utiliser:
+# CHANNEL_LAYERS = {
+#     "default": {
+#         "BACKEND": "channels_redis.core.RedisChannelLayer",
+#         "CONFIG": {
+#             "hosts": [env('REDIS_URL', default='redis://localhost:6379/3')],
+#         },
+#     },
+# }
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -149,6 +167,7 @@ SHARED_APPS = (
     'corsheaders',
     'drf_yasg',
     'celery',
+    'channels',
 
     # Local
     'apps.tenants',

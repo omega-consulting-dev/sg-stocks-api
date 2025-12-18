@@ -34,6 +34,23 @@ class CashboxSessionViewSet(viewsets.ModelViewSet):
     serializer_class = CashboxSessionSerializer
     filterset_fields = ['cashbox', 'cashier', 'status']
     
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'assigned':
+                return queryset.filter(cashbox__store__in=user.assigned_stores.all())
+            elif user.role.access_scope == 'own':
+                return queryset.filter(cashier=user)
+        
+        return queryset.filter(cashier=user)
+    
     @action(detail=False, methods=['post'])
     def open_session(self, request):
         """Open a new cashbox session."""
@@ -95,6 +112,23 @@ class CashMovementViewSet(viewsets.ModelViewSet):
     serializer_class = CashMovementSerializer
     filterset_fields = ['cashbox_session', 'movement_type', 'category', 'payment_method']
     
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'assigned':
+                return queryset.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        return queryset.filter(created_by=user)
+    
     def create(self, request, *args, **kwargs):
         import logging
         logger = logging.getLogger(__name__)
@@ -124,6 +158,8 @@ class EncaissementsListView(APIView):
     """
     
     def get(self, request):
+        user = request.user
+        
         # Récupérer les paramètres de filtre
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
@@ -149,6 +185,19 @@ class EncaissementsListView(APIView):
         
         # 1. Récupérer les paiements de factures
         invoice_payments = InvoicePayment.objects.select_related('invoice', 'invoice__customer', 'invoice__store').all()
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass  # Voir tout
+                elif user.role.access_scope == 'assigned':
+                    invoice_payments = invoice_payments.filter(invoice__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    invoice_payments = invoice_payments.filter(invoice__created_by=user)
+            else:
+                invoice_payments = invoice_payments.filter(invoice__created_by=user)
+        
         if start_date:
             invoice_payments = invoice_payments.filter(payment_date__gte=start_date)
         if end_date:
@@ -171,6 +220,19 @@ class EncaissementsListView(APIView):
         
         # 2. Récupérer les ventes avec paiement
         sales = Sale.objects.select_related('customer', 'store').filter(paid_amount__gt=0)
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass  # Voir tout
+                elif user.role.access_scope == 'assigned':
+                    sales = sales.filter(store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    sales = sales.filter(created_by=user)
+            else:
+                sales = sales.filter(created_by=user)
+        
         if start_date:
             sales = sales.filter(sale_date__gte=start_date)
         if end_date:
@@ -214,6 +276,8 @@ class EncaissementsExportView(APIView):
     """
     
     def get(self, request):
+        user = request.user
+        
         # Récupérer les paramètres de filtre
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
@@ -239,6 +303,19 @@ class EncaissementsExportView(APIView):
         
         # 1. Récupérer les paiements de factures
         invoice_payments = InvoicePayment.objects.select_related('invoice', 'invoice__customer', 'invoice__store').all()
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    invoice_payments = invoice_payments.filter(invoice__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    invoice_payments = invoice_payments.filter(invoice__created_by=user)
+            else:
+                invoice_payments = invoice_payments.filter(invoice__created_by=user)
+        
         if start_date:
             invoice_payments = invoice_payments.filter(payment_date__gte=start_date)
         if end_date:
@@ -259,6 +336,19 @@ class EncaissementsExportView(APIView):
         
         # 2. Récupérer les ventes avec paiement
         sales = Sale.objects.select_related('customer', 'store').filter(paid_amount__gt=0)
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    sales = sales.filter(store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    sales = sales.filter(created_by=user)
+            else:
+                sales = sales.filter(created_by=user)
+        
         if start_date:
             sales = sales.filter(sale_date__gte=start_date)
         if end_date:
@@ -349,12 +439,27 @@ class CaisseSoldeView(APIView):
     """
     
     def get(self, request):
+        user = request.user
+        
         # Récupérer le paramètre store
         store_id = request.query_params.get('store')
         
         # Total des encaissements (entrées d'argent)
         # 1. Paiements de factures
         invoice_payments_qs = InvoicePayment.objects.all()
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    invoice_payments_qs = invoice_payments_qs.filter(invoice__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
+            else:
+                invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
+        
         if store_id:
             invoice_payments_qs = invoice_payments_qs.filter(invoice__store_id=store_id)
         total_invoice_payments = invoice_payments_qs.aggregate(
@@ -363,6 +468,19 @@ class CaisseSoldeView(APIView):
         
         # 2. Ventes payées
         sales_qs = Sale.objects.all()
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    sales_qs = sales_qs.filter(store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    sales_qs = sales_qs.filter(created_by=user)
+            else:
+                sales_qs = sales_qs.filter(created_by=user)
+        
         if store_id:
             sales_qs = sales_qs.filter(store_id=store_id)
         total_sales = sales_qs.aggregate(
@@ -374,6 +492,19 @@ class CaisseSoldeView(APIView):
         # Total des sorties d'argent
         # 1. Dépenses
         expenses_qs = Expense.objects.all()
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    expenses_qs = expenses_qs.filter(store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    expenses_qs = expenses_qs.filter(created_by=user)
+            else:
+                expenses_qs = expenses_qs.filter(created_by=user)
+        
         if store_id:
             expenses_qs = expenses_qs.filter(store_id=store_id)
         total_expenses = expenses_qs.aggregate(
@@ -382,14 +513,40 @@ class CaisseSoldeView(APIView):
         
         # 2. Paiements fournisseurs
         supplier_payments_qs = SupplierPayment.objects.all()
-        if store_id:
-            supplier_payments_qs = supplier_payments_qs.filter(store_id=store_id)
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'own':
+                    supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
+                elif user.role.access_scope == 'assigned':
+                    supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
+            else:
+                supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
+        
+        # Note: SupplierPayment n'a pas de champ store
         total_supplier_payments = supplier_payments_qs.aggregate(
             total=Sum('amount')
         )['total'] or 0
         
         # 3. Remboursements d'emprunts
         loan_payments_qs = LoanPayment.objects.all()
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    # Filtrer par stores assignés si le loan a un store
+                    loan_payments_qs = loan_payments_qs.filter(loan__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    loan_payments_qs = loan_payments_qs.filter(loan__created_by=user)
+            else:
+                loan_payments_qs = loan_payments_qs.filter(loan__created_by=user)
+        
         if store_id:
             loan_payments_qs = loan_payments_qs.filter(loan__store_id=store_id)
         total_loan_payments = loan_payments_qs.aggregate(
@@ -398,6 +555,19 @@ class CaisseSoldeView(APIView):
         
         # 4. Décaissements (mouvements de caisse sortants)
         cash_movements_out_qs = CashMovement.objects.filter(movement_type='out')
+        
+        # Filtrage par utilisateur
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    cash_movements_out_qs = cash_movements_out_qs.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
+            else:
+                cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
+        
         if store_id:
             cash_movements_out_qs = cash_movements_out_qs.filter(cashbox_session__cashbox__store_id=store_id)
         total_cash_movements_out = cash_movements_out_qs.aggregate(
@@ -430,6 +600,8 @@ class DecaissementsListView(APIView):
     """
     
     def get(self, request):
+        user = request.user
+        
         # Récupérer les paramètres de filtre
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
@@ -458,6 +630,18 @@ class DecaissementsListView(APIView):
             movement_type='out',
             category='bank_deposit'
         ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store').order_by('-created_at')
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass  # Voir tout
+                elif user.role.access_scope == 'assigned':
+                    cash_movements = cash_movements.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    cash_movements = cash_movements.filter(created_by=user)
+            else:
+                cash_movements = cash_movements.filter(created_by=user)
         
         if start_date:
             cash_movements = cash_movements.filter(created_at__date__gte=start_date)
@@ -504,6 +688,8 @@ class DecaissementsExportView(APIView):
     """
     
     def get(self, request):
+        user = request.user
+        
         # Récupérer les paramètres de filtre
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
@@ -532,6 +718,18 @@ class DecaissementsExportView(APIView):
             movement_type='out',
             category='bank_deposit'
         ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store').order_by('created_at')
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    cash_movements = cash_movements.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    cash_movements = cash_movements.filter(created_by=user)
+            else:
+                cash_movements = cash_movements.filter(created_by=user)
         
         if start_date:
             cash_movements = cash_movements.filter(created_at__date__gte=start_date)

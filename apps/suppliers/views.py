@@ -33,8 +33,10 @@ from apps.suppliers.filters import SupplierFilter
 
 class SupplierViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for Supplier management.
-    Supports full CRUD operations, search, filtering, import and export.
+    ViewSet for Supplier management with role-based filtering.
+    - Super admin / Manager (access_scope='all'): voit tous les fournisseurs
+    - Magasinier (access_scope='assigned'): voit les fournisseurs de ses stores
+    - Caissier (access_scope='own'): voit uniquement les fournisseurs qu'il a créés ou avec qui il a fait des transactions
     """
     queryset = Supplier.objects.filter(is_active=True)
     permission_classes = [IsAuthenticated]
@@ -44,6 +46,60 @@ class SupplierViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'supplier_code', 'created_at', 'rating', 'city']
     ordering = ['name']
     
+    def get_queryset(self):
+        """
+        Filtrage sécurisé des fournisseurs selon le rôle et access_scope.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            return queryset
+        
+        # Vérifier le scope d'accès du rôle
+        if hasattr(user, 'role') and user.role:
+            # Manager avec accès à tous les fournisseurs
+            if user.role.access_scope == 'all':
+                return queryset
+            
+            # Magasinier: fournisseurs des stores assignés
+            elif user.role.access_scope == 'assigned':
+                from apps.purchases.models import PurchaseOrder
+                assigned_stores = user.assigned_stores.all()
+                
+                if not assigned_stores.exists():
+                    return queryset.filter(created_by=user)
+                    
+                # Fournisseurs avec commandes dans les stores assignés
+                supplier_ids_from_po = PurchaseOrder.objects.filter(
+                    store__in=assigned_stores
+                ).values_list('supplier_id', flat=True).distinct()
+                
+                # Union des fournisseurs + ceux créés par l'utilisateur
+                return queryset.filter(
+                    Q(id__in=supplier_ids_from_po) |
+                    Q(created_by=user)
+                ).distinct()
+            
+            # Caissier: uniquement fournisseurs créés par lui ou avec qui il a fait des transactions
+            elif user.role.access_scope == 'own':
+                from apps.purchases.models import PurchaseOrder
+                
+                # Fournisseurs des commandes créées par le caissier
+                supplier_ids_from_po = PurchaseOrder.objects.filter(
+                    created_by=user
+                ).values_list('supplier_id', flat=True).distinct()
+                
+                # Union des fournisseurs + ceux créés directement par le caissier
+                return queryset.filter(
+                    Q(id__in=supplier_ids_from_po) |
+                    Q(created_by=user)
+                ).distinct()
+        
+        # Par défaut, filtrer par créateur (sécurité)
+        return queryset.filter(created_by=user)
+    
     def get_serializer_class(self):
         """Return appropriate serializer based on action."""
         if self.action == 'list':
@@ -52,8 +108,39 @@ class SupplierViewSet(viewsets.ModelViewSet):
             return SupplierCreateUpdateSerializer
         return SupplierDetailSerializer
     
+    def perform_create(self, serializer):
+        """Enregistrer le créateur du fournisseur."""
+        # Vérifier la permission
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_suppliers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de créer des fournisseurs.")
+        
+        serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Vérifier la permission avant la mise à jour."""
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_suppliers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de modifier des fournisseurs.")
+        
+        serializer.save()
+    
     def perform_destroy(self, instance):
         """Soft delete: désactiver au lieu de supprimer."""
+        # Vérifier la permission
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_suppliers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de supprimer des fournisseurs.")
+        
         instance.is_active = False
         instance.save()
     
@@ -63,11 +150,10 @@ class SupplierViewSet(viewsets.ModelViewSet):
         Liste les fournisseurs avec solde dû pour le tenant courant.
         GET /api/v1/suppliers/debts/
         Retourne les fournisseurs liés à des PurchaseOrder avec un solde non réglé.
-        Les données sont automatiquement filtrées par le tenant actuel (django-tenants).
+        Les données sont automatiquement filtrées par access_scope (own/assigned/all).
         """
-        # Récupérer tous les fournisseurs et calculer leur balance via get_balance()
-        # Cette méthode filtre correctement les PO avec balance_due > 0 uniquement
-        suppliers = Supplier.objects.filter(is_active=True)
+        # Utiliser get_queryset() pour respecter le filtrage par access_scope
+        suppliers = self.get_queryset()
         
         data = []
         for supplier in suppliers:
@@ -355,6 +441,20 @@ class SupplierPaymentViewSet(viewsets.ModelViewSet):
         queryset = SupplierPayment.objects.select_related(
             'supplier', 'purchase_order', 'created_by'
         ).all()
+        
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            pass  # Retourner tout le queryset
+        elif hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                pass  # Retourner tout le queryset
+            elif user.role.access_scope == 'own':
+                queryset = queryset.filter(created_by=user)
+        else:
+            # Par défaut, filtrer par created_by
+            queryset = queryset.filter(created_by=user)
         
         # Filter by supplier if provided
         supplier_id = self.request.query_params.get('supplier')

@@ -28,10 +28,65 @@ class LoginSerializer(TokenObtainPairSerializer):
 
         data = super().validate(attrs)
 
+        # Sérialiser le rôle si présent
+        role_data = None
+        if user.role:
+            role_data = {
+                'id': user.role.id,
+                'name': user.role.name,
+                'display_name': user.role.display_name,
+                'can_manage_users': user.role.can_manage_users,
+                'can_manage_products': user.role.can_manage_products,
+                'can_view_products': user.role.can_view_products,
+                'can_manage_categories': user.role.can_manage_categories,
+                'can_view_categories': user.role.can_view_categories,
+                'can_manage_services': user.role.can_manage_services,
+                'can_view_services': user.role.can_view_services,
+                'can_manage_inventory': user.role.can_manage_inventory,
+                'can_view_inventory': user.role.can_view_inventory,
+                'can_manage_sales': user.role.can_manage_sales,
+                'can_manage_customers': user.role.can_manage_customers,
+                'can_manage_suppliers': user.role.can_manage_suppliers,
+                'can_manage_cashbox': user.role.can_manage_cashbox,
+                'can_manage_loans': user.role.can_manage_loans,
+                'can_manage_expenses': user.role.can_manage_expenses,
+                'can_view_analytics': user.role.can_view_analytics,
+                'can_export_data': user.role.can_export_data,
+            }
+
+        # Récupérer les informations de magasin
+        default_store = user.get_default_store()
+        default_store_data = None
+        if default_store:
+            default_store_data = {
+                'id': default_store.id,
+                'name': default_store.name,
+                'code': default_store.code,
+            }
+
+        # Récupérer le nom du tenant (company)
+        from django.db import connection
+        tenant_name = connection.tenant.name if hasattr(connection, 'tenant') else None
+
+        # Construire le nom complet
+        full_name = f"{user.first_name} {user.last_name}".strip() if user.first_name or user.last_name else user.username
+
         data['user'] = {
             'id': user.id,
             'username': user.username,
             'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'name': full_name,
+            'tenant_name': tenant_name,
+            'is_superuser': user.is_superuser,
+            'is_staff': user.is_staff,
+            'is_active': user.is_active,
+            'role': role_data,
+            'role_name': user.role.display_name if user.role else None,
+            'default_store': default_store_data,
+            'has_assigned_stores': user.has_assigned_stores(),
+            'is_store_restricted': user.is_store_restricted(),
         }
         return data
 ### end auth
@@ -56,7 +111,7 @@ class RoleSerializer(serializers.ModelSerializer):
             'can_manage_expenses', 'can_view_analytics', 'can_export_data',
             'permissions_count', 'users_count', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'permissions_count', 'users_count']
     
     def get_permissions_count(self, obj):
         return obj.permissions.count()
@@ -103,6 +158,9 @@ class UserDetailSerializer(serializers.ModelSerializer):
     secondary_roles_list = RoleSerializer(source='secondary_roles', many=True, read_only=True)
     assigned_stores_list = serializers.SerializerMethodField()
     display_name = serializers.CharField(source='get_display_name', read_only=True)
+    default_store = serializers.SerializerMethodField()
+    has_assigned_stores = serializers.BooleanField(source='has_assigned_stores', read_only=True)
+    is_store_restricted = serializers.BooleanField(source='is_store_restricted', read_only=True)
     
     class Meta:
         model = User
@@ -114,7 +172,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
             # Employee
             'employee_id', 'role', 'role_name',
             'secondary_roles', 'secondary_roles_list', 'assigned_stores',
-            'assigned_stores_list', 'hire_date', 'termination_date',
+            'assigned_stores_list', 'default_store', 'has_assigned_stores', 
+            'is_store_restricted', 'hire_date', 'termination_date',
             
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
@@ -128,6 +187,14 @@ class UserDetailSerializer(serializers.ModelSerializer):
     def get_assigned_stores_list(self, obj):
         from apps.inventory.serializers import StoreMinimalSerializer
         return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
+    
+    def get_default_store(self, obj):
+        """Return default store ID for store-restricted users."""
+        default_store = obj.get_default_store()
+        if default_store:
+            from apps.inventory.serializers import StoreMinimalSerializer
+            return StoreMinimalSerializer(default_store).data
+        return None
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for user creation."""

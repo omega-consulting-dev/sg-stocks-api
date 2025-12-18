@@ -106,10 +106,29 @@ class Invoice(AuditModel):
     def __str__(self):
         return f"{self.invoice_number} - {self.customer.name}"
     
+    def save(self, *args, **kwargs):
+        """Generate invoice number if not provided."""
+        if not self.invoice_number:
+            from django.utils import timezone
+            # Generate invoice number: FAC-YYYY-XXXXXX
+            today = timezone.now().date()
+            year = today.strftime('%Y')
+            
+            # Count invoices created this year
+            year_invoices = Invoice.objects.filter(
+                invoice_number__startswith=f'FAC{year}'
+            ).count()
+            
+            self.invoice_number = f'FAC{year}{year_invoices + 1:06d}'
+        
+        super().save(*args, **kwargs)
+    
     @property
     def balance_due(self):
         """Calculate remaining balance."""
-        return self.total_amount - self.paid_amount
+        from decimal import Decimal, ROUND_HALF_UP
+        balance = self.total_amount - self.paid_amount
+        return balance.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     
     @property
     def is_fully_paid(self):
@@ -144,6 +163,62 @@ class Invoice(AuditModel):
         generator = InvoicePDFGenerator(self)
         generator.generate(buffer)
         return buffer
+    
+    @classmethod
+    def generate_from_sale(cls, sale):
+        """Generate invoice from a confirmed sale."""
+        from datetime import timedelta
+        
+        if sale.status not in ['confirmed', 'completed']:
+            raise ValueError('Can only generate invoice from confirmed or completed sales')
+        
+        if hasattr(sale, 'invoice') and sale.invoice:
+            raise ValueError('Invoice already exists for this sale')
+        
+        # Calculate due date based on payment term
+        payment_term_days = {
+            'immediate': 0,
+            '15_days': 15,
+            '30_days': 30,
+            '60_days': 60
+        }
+        due_days = payment_term_days.get(sale.payment_term, 30) if hasattr(sale, 'payment_term') else 30
+        due_date = sale.sale_date + timedelta(days=due_days)
+        
+        # Create invoice from sale
+        invoice = cls.objects.create(
+            customer=sale.customer,
+            sale=sale,
+            store=sale.store,
+            created_by=sale.created_by,  # Copy creator from sale
+            invoice_date=sale.sale_date,
+            due_date=due_date,
+            status='draft',
+            subtotal=sale.subtotal,
+            discount_amount=sale.discount_amount,
+            tax_amount=sale.tax_amount,
+            total_amount=sale.total_amount,
+            paid_amount=sale.paid_amount,
+            payment_term='immediate',
+            notes=sale.notes
+        )
+        
+        # Copy sale lines to invoice lines
+        for sale_line in sale.lines.all():
+            InvoiceLine.objects.create(
+                invoice=invoice,
+                product=sale_line.product,
+                service=sale_line.service,
+                description=sale_line.description or (
+                    sale_line.product.name if sale_line.product else sale_line.service.name
+                ),
+                quantity=sale_line.quantity,
+                unit_price=sale_line.unit_price,
+                tax_rate=sale_line.tax_rate,
+                discount_percentage=sale_line.discount_percentage
+            )
+        
+        return invoice
 
 
 class InvoiceLine(TimeStampedModel):

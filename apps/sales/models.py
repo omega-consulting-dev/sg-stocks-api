@@ -104,7 +104,9 @@ class Sale(AuditModel):
     @property
     def balance_due(self):
         """Calculate remaining balance."""
-        return self.total_amount - self.paid_amount
+        from decimal import Decimal, ROUND_HALF_UP
+        balance = self.total_amount - self.paid_amount
+        return balance.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     
     @property
     def is_fully_paid(self):
@@ -113,10 +115,17 @@ class Sale(AuditModel):
     
     def calculate_totals(self):
         """Calculate sale totals from lines."""
+        from decimal import Decimal, ROUND_HALF_UP
+        
         lines = self.lines.all()
         self.subtotal = sum(line.subtotal for line in lines)
         self.tax_amount = sum(line.tax_amount for line in lines)
         self.total_amount = self.subtotal + self.tax_amount - self.discount_amount
+        
+        # Arrondir tous les montants à 2 décimales pour éviter les problèmes de précision
+        self.subtotal = self.subtotal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        self.tax_amount = self.tax_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        self.total_amount = self.total_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         
         # Update payment status
         if self.paid_amount == 0:
@@ -125,6 +134,64 @@ class Sale(AuditModel):
             self.payment_status = 'paid'
         else:
             self.payment_status = 'partial'
+    
+    def confirm(self):
+        """Confirm sale and decrement stock."""
+        from apps.inventory.models import Stock
+        
+        if self.status != 'draft':
+            raise ValueError('Only draft sales can be confirmed')
+        
+        # Decrement stock for each product line
+        for line in self.lines.filter(line_type='product', product__isnull=False):
+            try:
+                stock = Stock.objects.get(
+                    product=line.product,
+                    store=self.store
+                )
+                if stock.available_quantity < line.quantity:
+                    raise ValueError(
+                        f'Stock insuffisant pour {line.product.name}. '
+                        f'Disponible: {stock.available_quantity}, Demandé: {line.quantity}'
+                    )
+                stock.quantity -= line.quantity
+                stock.save()
+            except Stock.DoesNotExist:
+                raise ValueError(f'Aucun stock trouvé pour {line.product.name} dans ce magasin')
+        
+        self.status = 'confirmed'
+        self.save()
+    
+    def complete(self):
+        """Mark sale as completed."""
+        if self.status != 'confirmed':
+            raise ValueError('Only confirmed sales can be completed')
+        
+        self.status = 'completed'
+        self.save()
+    
+    def cancel(self):
+        """Cancel sale and restore stock if it was confirmed."""
+        from apps.inventory.models import Stock
+        
+        if self.status == 'cancelled':
+            raise ValueError('Sale is already cancelled')
+        
+        # Restore stock if sale was confirmed
+        if self.status in ['confirmed', 'completed']:
+            for line in self.lines.filter(line_type='product', product__isnull=False):
+                try:
+                    stock = Stock.objects.get(
+                        product=line.product,
+                        store=self.store
+                    )
+                    stock.quantity += line.quantity
+                    stock.save()
+                except Stock.DoesNotExist:
+                    pass  # Skip if stock doesn't exist
+        
+        self.status = 'cancelled'
+        self.save()
 
 
 class SaleLine(TimeStampedModel):

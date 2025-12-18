@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
+from django.db.models import Sum, Count, Q
 from drf_spectacular.utils import extend_schema
 
 from core.utils.export_utils import ExcelExporter
@@ -17,9 +18,50 @@ class ExpenseCategoryViewSet(viewsets.ModelViewSet):
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for Expense model with secure user-based filtering.
+    - Super admin: voit toutes les dépenses
+    - Manager (access_scope='all'): voit toutes les dépenses
+    - Caissier (access_scope='assigned'): voit les dépenses de ses stores assignés
+    - Caissier (access_scope='own'): voit uniquement ses propres dépenses
+    """
+    
     queryset = Expense.objects.select_related('category', 'store')
     serializer_class = ExpenseSerializer
     filterset_fields = ['category', 'store', 'status', 'expense_date']
+    
+    def get_queryset(self):
+        """
+        Filtrage sécurisé des dépenses selon le rôle et access_scope.
+        Chaque caissier ne voit que ses propres dépenses.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            return queryset
+        
+        # Vérifier le scope d'accès du rôle
+        if hasattr(user, 'role') and user.role:
+            # Manager avec accès à toutes les dépenses
+            if user.role.access_scope == 'all':
+                return queryset
+            
+            # Utilisateur avec accès aux stores assignés
+            elif user.role.access_scope == 'assigned':
+                assigned_stores = user.assigned_stores.all()
+                if assigned_stores.exists():
+                    return queryset.filter(store__in=assigned_stores)
+                else:
+                    return queryset.none()
+            
+            # Utilisateur avec accès uniquement à ses propres dépenses (caissiers)
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        # Par défaut, filtrer par créateur (sécurité)
+        return queryset.filter(created_by=user)
     
     def perform_create(self, serializer):
         count = Expense.objects.count() + 1
@@ -113,6 +155,211 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         
         filename = f"depenses_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return ExcelExporter.generate_response(wb, filename)
+    
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get expense statistics grouped by category or individual expenses."""
+        # Get filter parameters
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        category_id = request.query_params.get('category')
+        group_by = request.query_params.get('group_by', 'category')  # 'category' or 'expense'
+        
+        # Start with base queryset - only paid and approved expenses
+        queryset = Expense.objects.filter(
+            Q(status='paid') | Q(status='approved')
+        ).select_related('category')
+        
+        # Apply filters
+        if date_from:
+            queryset = queryset.filter(expense_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(expense_date__lte=date_to)
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        
+        # Group results
+        if group_by == 'category':
+            # Group by category, sum amounts and count expenses
+            stats = queryset.values('category__name').annotate(
+                total_amount=Sum('amount'),
+                count=Count('id')
+            ).order_by('-total_amount')
+            
+            result = [
+                {
+                    'category_name': item['category__name'],
+                    'total_amount': float(item['total_amount'] or 0),
+                    'count': item['count']
+                }
+                for item in stats
+            ]
+        else:
+            # Return individual expenses
+            expenses = queryset.values(
+                'id', 'expense_number', 'expense_date', 'description',
+                'amount', 'beneficiary', 'category__name'
+            ).order_by('-expense_date')
+            
+            result = [
+                {
+                    'category_name': expense['category__name'],
+                    'total_amount': float(expense['amount']),
+                    'count': 1,
+                    'expense_number': expense['expense_number'],
+                    'expense_date': expense['expense_date'],
+                    'description': expense['description'],
+                    'beneficiary': expense['beneficiary']
+                }
+                for expense in expenses
+            ]
+        
+        return Response(result)
+    
+    @action(detail=False, methods=['get'], url_path='stats/export_excel')
+    def export_stats_excel(self, request):
+        """Export expense statistics to Excel."""
+        # Get filter parameters (same as stats)
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        category_id = request.query_params.get('category')
+        group_by = request.query_params.get('group_by', 'category')
+        
+        # Build queryset
+        queryset = Expense.objects.filter(
+            Q(status='paid') | Q(status='approved')
+        ).select_related('category')
+        
+        if date_from:
+            queryset = queryset.filter(expense_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(expense_date__lte=date_to)
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        
+        wb, ws = ExcelExporter.create_workbook("Statistiques Dépenses")
+        
+        if group_by == 'category':
+            columns = ['Catégorie', 'Nombre de Dépenses', 'Montant Total']
+            ExcelExporter.style_header(ws, columns)
+            
+            stats = queryset.values('category__name').annotate(
+                total_amount=Sum('amount'),
+                count=Count('id')
+            ).order_by('-total_amount')
+            
+            for row_num, item in enumerate(stats, 2):
+                ws.cell(row=row_num, column=1, value=item['category__name'])
+                ws.cell(row=row_num, column=2, value=item['count'])
+                ws.cell(row=row_num, column=3, value=float(item['total_amount'] or 0))
+        else:
+            columns = ['N° Dépense', 'Date', 'Catégorie', 'Bénéficiaire', 'Description', 'Montant']
+            ExcelExporter.style_header(ws, columns)
+            
+            expenses = queryset.order_by('-expense_date')
+            
+            for row_num, expense in enumerate(expenses, 2):
+                ws.cell(row=row_num, column=1, value=expense.expense_number)
+                ws.cell(row=row_num, column=2, value=expense.expense_date.strftime('%d/%m/%Y'))
+                ws.cell(row=row_num, column=3, value=expense.category.name)
+                ws.cell(row=row_num, column=4, value=expense.beneficiary)
+                ws.cell(row=row_num, column=5, value=expense.description)
+                ws.cell(row=row_num, column=6, value=float(expense.amount))
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"stats_depenses_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+    
+    @action(detail=False, methods=['get'], url_path='stats/export_pdf')
+    def export_stats_pdf(self, request):
+        """Export expense statistics to PDF."""
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from django.http import HttpResponse
+        from io import BytesIO
+        
+        # Get filter parameters
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        category_id = request.query_params.get('category')
+        group_by = request.query_params.get('group_by', 'category')
+        
+        # Build queryset
+        queryset = Expense.objects.filter(
+            Q(status='paid') | Q(status='approved')
+        ).select_related('category')
+        
+        if date_from:
+            queryset = queryset.filter(expense_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(expense_date__lte=date_to)
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+        
+        # Create PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title = Paragraph("Statistiques des Dépenses", styles['Title'])
+        elements.append(title)
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Data table
+        if group_by == 'category':
+            data = [['Catégorie', 'Nombre de Dépenses', 'Montant Total']]
+            
+            stats = queryset.values('category__name').annotate(
+                total_amount=Sum('amount'),
+                count=Count('id')
+            ).order_by('-total_amount')
+            
+            for item in stats:
+                data.append([
+                    item['category__name'],
+                    str(item['count']),
+                    f"{float(item['total_amount'] or 0):,.2f} FCFA"
+                ])
+        else:
+            data = [['N° Dépense', 'Date', 'Catégorie', 'Montant']]
+            
+            expenses = queryset.order_by('-expense_date')[:100]  # Limit for PDF
+            
+            for expense in expenses:
+                data.append([
+                    expense.expense_number,
+                    expense.expense_date.strftime('%d/%m/%Y'),
+                    expense.category.name,
+                    f"{float(expense.amount):,.2f} FCFA"
+                ])
+        
+        # Create table
+        table = Table(data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        
+        elements.append(table)
+        doc.build(elements)
+        
+        buffer.seek(0)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="stats_depenses_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf"'
+        
+        return response
 
 
 class ExpenseExportExcelView(APIView):

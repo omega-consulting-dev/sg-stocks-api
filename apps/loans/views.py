@@ -18,6 +18,21 @@ class LoanViewSet(viewsets.ModelViewSet):
     module_name = 'loans'
     filterset_fields = ['loan_type', 'status']
     
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        return queryset.filter(created_by=user)
+    
     def get_serializer_class(self):
         if self.action == 'list':
             return LoanListSerializer

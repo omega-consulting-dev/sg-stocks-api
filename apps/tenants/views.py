@@ -1,12 +1,15 @@
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from .serializers import TenantProvisioningSerializer
 from django.conf import settings
 from rest_framework import viewsets
 from rest_framework.permissions import IsAdminUser
 from .models import Company, Domain
 from .serializers import CompanySerializer, DomainSerializer
+from django.db import connection
 
 class CompanyViewSet(viewsets.ModelViewSet):
     """
@@ -25,6 +28,47 @@ class DomainReadOnlyViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Domain.objects.all()
     serializer_class = DomainSerializer
     permission_classes = [IsAdminUser]
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def current_tenant(request):
+    """
+    Récupère ou met à jour les informations du tenant courant.
+    Accessible depuis n'importe quel schéma tenant (pas le public).
+    """
+    # Récupérer le tenant actuel depuis le schéma
+    schema_name = connection.schema_name
+    
+    if schema_name == 'public':
+        return Response(
+            {"error": "Cette route n'est pas accessible depuis le schéma public"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        # Récupérer le tenant via le schema_name
+        tenant = Company.objects.get(schema_name=schema_name)
+        
+        if request.method == 'GET':
+            serializer = CompanySerializer(tenant)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        elif request.method == 'PATCH':
+            # Seuls certains champs peuvent être modifiés
+            allowed_fields = ['name', 'email', 'phone', 'address']
+            update_data = {k: v for k, v in request.data.items() if k in allowed_fields}
+            
+            serializer = CompanySerializer(tenant, data=update_data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except Company.DoesNotExist:
+        return Response(
+            {"error": "Tenant introuvable"},
+            status=status.HTTP_404_NOT_FOUND
+        )
 
 class TenantProvisioningView(APIView):
     """

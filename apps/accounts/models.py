@@ -8,7 +8,111 @@ from django.db import models
 from django.core.validators import RegexValidator
 from django.utils.translation import gettext_lazy as _
 from django_tenants.utils import tenant_context
+from django.conf import settings
 from core.models import TimeStampedModel
+
+
+class Notification(TimeStampedModel):
+    """
+    Notifications pour les utilisateurs
+    Types: rupture stock, échéance dette, transfert stock, paiement, facture
+    """
+    
+    TYPE_CHOICES = [
+        ('stock_rupture', 'Rupture de stock'),
+        ('stock_low', 'Stock faible'),
+        ('debt_due', 'Échéance de dette'),
+        ('transfer_pending', 'Transfert en attente'),
+        ('transfer_validated', 'Transfert validé'),
+        ('payment_received', 'Paiement reçu'),
+        ('payment_due', 'Paiement en retard'),
+        ('invoice_created', 'Facture créée'),
+        ('invoice_paid', 'Facture payée'),
+    ]
+    
+    PRIORITY_CHOICES = [
+        ('low', 'Basse'),
+        ('medium', 'Moyenne'),
+        ('high', 'Haute'),
+        ('urgent', 'Urgente'),
+    ]
+    
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+        verbose_name='Utilisateur'
+    )
+    
+    type = models.CharField(
+        max_length=50,
+        choices=TYPE_CHOICES,
+        verbose_name='Type de notification'
+    )
+    
+    title = models.CharField(
+        max_length=255,
+        verbose_name='Titre'
+    )
+    
+    message = models.TextField(
+        verbose_name='Message'
+    )
+    
+    priority = models.CharField(
+        max_length=20,
+        choices=PRIORITY_CHOICES,
+        default='medium',
+        verbose_name='Priorité'
+    )
+    
+    is_read = models.BooleanField(
+        default=False,
+        verbose_name='Lu'
+    )
+    
+    read_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name='Lu le'
+    )
+    
+    # Données contextuelles (JSON)
+    data = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='Données associées',
+        help_text='Informations supplémentaires (IDs, liens, etc.)'
+    )
+    
+    # URL de redirection
+    action_url = models.CharField(
+        max_length=500,
+        null=True,
+        blank=True,
+        verbose_name='URL d\'action'
+    )
+    
+    class Meta:
+        db_table = 'notifications'
+        verbose_name = 'Notification'
+        verbose_name_plural = 'Notifications'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read']),
+            models.Index(fields=['type', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_type_display()} - {self.user.email}"
+    
+    def mark_as_read(self):
+        """Marquer la notification comme lue"""
+        if not self.is_read:
+            from django.utils import timezone
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save(update_fields=['is_read', 'read_at'])
 
 
 class UserManager(BaseUserManager):
@@ -274,6 +378,40 @@ class User(AbstractUser, TimeStampedModel):
         if self.role and self.role.access_scope == 'all':
             return True
         
+        return self.assigned_stores.filter(id=store.id).exists()
+    
+    def get_default_store(self):
+        """
+        Get the default store for this user.
+        Returns the first assigned store if user has limited access.
+        Returns None for admin/superadmin (they can select any store).
+        """
+        # Super admin et admin peuvent gérer tous les magasins
+        if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
+            return None
+        
+        # Pour les autres rôles, retourner le premier magasin assigné
+        return self.assigned_stores.first()
+    
+    def has_assigned_stores(self):
+        """Check if user has assigned stores (not admin/superadmin)."""
+        if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
+            return False
+        return self.assigned_stores.exists()
+    
+    def is_store_restricted(self):
+        """
+        Check if user is restricted to specific stores.
+        True for: magasinier, caissier, store_manager
+        False for: admin, super_admin
+        """
+        if self.is_superuser:
+            return False
+        
+        if self.role and self.role.name in ['super_admin', 'admin']:
+            return False
+        
+        return True
         return self.assigned_stores.filter(id=store.id).exists()
 
 

@@ -44,13 +44,29 @@ class StoreViewSet(viewsets.ModelViewSet):
     
     queryset = Store.objects.filter(is_active=True).select_related('manager')
     serializer_class = StoreSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission]
-    module_name = 'inventory'
+    permission_classes = [IsAuthenticated]  # Pas de HasModulePermission - tous peuvent voir leurs stores assignés
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['store_type', 'is_active']
     search_fields = ['name', 'code', 'city']
     ordering_fields = ['name', 'code', 'created_at']
     ordering = ['name']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope in ['assigned', 'own']:
+                # Les utilisateurs voient leurs stores assignés
+                return queryset.filter(id__in=user.assigned_stores.values_list('id', flat=True))
+        
+        # Par défaut, retourner les stores assignés
+        return queryset.filter(id__in=user.assigned_stores.values_list('id', flat=True))
     
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -135,8 +151,7 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     
     queryset = Stock.objects.select_related('product', 'store')
     serializer_class = StockSerializer
-    permission_classes = [IsAuthenticated, HasModulePermission]
-    module_name = 'inventory'
+    permission_classes = [IsAuthenticated]  # Lecture seule, tous les utilisateurs authentifiés peuvent voir les stocks
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['product', 'store']
     search_fields = ['product__name', 'product__reference']
@@ -156,6 +171,193 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Export stock levels to Excel with filtering."""
+        # Use filter_queryset to apply all configured filters
+        stocks = self.filter_queryset(self.get_queryset())
+        
+        from openpyxl.styles import Font, Alignment, PatternFill
+        from openpyxl.utils import get_column_letter
+        import openpyxl
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Inventaire"
+        
+        columns = [
+            'Produit', 'Référence', 'Magasin', 'Statut', 'Stock total'
+        ]
+        
+        # Style header
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        
+        for col_num, col_title in enumerate(columns, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.value = col_title
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Add data
+        for row_num, stock in enumerate(stocks, 2):
+            # Determine status
+            if stock.quantity == 0:
+                status = "Rupture"
+            elif stock.quantity < stock.product.minimum_stock:
+                status = "Faible"
+            else:
+                status = "Normal"
+            
+            ws.cell(row=row_num, column=1, value=stock.product.name)
+            ws.cell(row=row_num, column=2, value=stock.product.reference or '')
+            ws.cell(row=row_num, column=3, value=stock.store.name)
+            ws.cell(row=row_num, column=4, value=status)
+            ws.cell(row=row_num, column=5, value=float(stock.quantity))
+        
+        # Auto adjust columns
+        for col_num in range(1, len(columns) + 1):
+            ws.column_dimensions[get_column_letter(col_num)].width = 18
+        
+        # Generate response
+        response = HttpResponse(content_type='application/vnd.ms-excel')
+        filename = f"inventaire_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        wb.save(response)
+        
+        return response
+    
+    @action(detail=False, methods=['get'])
+    def export_pdf(self, request):
+        """Export stock levels to PDF with filtering."""
+        # Use filter_queryset to apply all configured filters
+        stocks = self.filter_queryset(self.get_queryset())
+        
+        # Limit to 100 records for PDF
+        stocks_list = list(stocks[:100])
+        
+        # Import necessary libraries
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from django.utils import timezone
+        import io
+        
+        # Create PDF buffer
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=landscape(A4),
+            rightMargin=30,
+            leftMargin=30,
+            topMargin=50,
+            bottomMargin=30
+        )
+        
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Title style
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            textColor=colors.HexColor('#366092'),
+            spaceAfter=20,
+            alignment=1  # Center alignment
+        )
+        
+        title = Paragraph("État des Stocks - Inventaire", title_style)
+        elements.append(title)
+        
+        # Generation info
+        date_style = ParagraphStyle(
+            'DateStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.grey,
+            alignment=1
+        )
+        date_text = Paragraph(
+            f"Généré le {timezone.now().strftime('%d/%m/%Y à %H:%M')}", 
+            date_style
+        )
+        elements.append(date_text)
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Table data
+        data = [['Produit', 'Référence', 'Magasin', 'Statut', 'Stock total']]
+        
+        low_stock_count = 0
+        out_of_stock_count = 0
+        total_quantity = 0
+        
+        for stock in stocks_list:
+            # Determine status
+            if stock.quantity == 0:
+                status = "Rupture"
+                out_of_stock_count += 1
+            elif stock.quantity < stock.product.minimum_stock:
+                status = "Faible"
+                low_stock_count += 1
+            else:
+                status = "Normal"
+            
+            total_quantity += float(stock.quantity)
+            
+            row = [
+                stock.product.name[:25],
+                stock.product.reference[:15] if stock.product.reference else '-',
+                stock.store.name[:15],
+                status,
+                str(stock.quantity)
+            ]
+            data.append(row)
+        
+        # Create table
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            # Header style
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            
+            # Body style
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+            ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        elements.append(table)
+        
+        # Statistics
+        elements.append(Spacer(1, 0.3*inch))
+        stats_text = f"<b>Total articles:</b> {len(stocks_list)} | <b>Quantité totale:</b> {total_quantity:.0f} | <b>Stock faible:</b> {low_stock_count} | <b>Rupture:</b> {out_of_stock_count}"
+        stats = Paragraph(stats_text, date_style)
+        elements.append(stats)
+        
+        # Build PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Generate response
+        response = HttpResponse(buffer.read(), content_type='application/pdf')
+        filename = f'inventaire_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        return response
+
 
 
 class StockMovementFilterSet(django_filters.FilterSet):
@@ -190,7 +392,7 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     @extend_schema(summary="Obtenir le prochain numéro de pièce", tags=["Inventory"])
-    @action(detail=False, methods=['get'], url_path='next-receipt-number')
+    @action(detail=False, methods=['get'], url_path='next-receipt-number', permission_classes=[IsAuthenticated])
     def next_receipt_number(self, request):
         """Get the next available receipt number."""
         # Récupérer le plus grand numéro existant (actif ou non) pour continuer la séquence
@@ -349,8 +551,7 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         ws.title = "Mouvements"
         
         columns = [
-            'Date', 'Référence', 'Produit', 'Magasin', 'Fournisseur', 'Type', 
-            'Quantité', 'Coût Unitaire', 'Destination', 'PO Number', 'Créé par', 'Notes'
+            'Date', 'Désignation', 'Entrées', 'Sorties', 'Stocks final'
         ]
         
         # Style header
@@ -364,24 +565,36 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
             cell.font = header_font
             cell.alignment = Alignment(horizontal='center', vertical='center')
         
+        # Sort movements by date (oldest first) for progressive stock calculation
+        movements_list = list(movements.order_by('created_at'))
+        
+        # Calculate progressive stock
+        stock_cumulatif = 0
+        
         # Add data
-        for row_num, movement in enumerate(movements, 2):
-            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%Y-%m-%d %H:%M'))
-            ws.cell(row=row_num, column=2, value=movement.reference)
-            ws.cell(row=row_num, column=3, value=movement.product.name)
-            ws.cell(row=row_num, column=4, value=movement.store.name)
-            ws.cell(row=row_num, column=5, value=movement.supplier.name if movement.supplier else '')
-            ws.cell(row=row_num, column=6, value=movement.get_movement_type_display())
-            ws.cell(row=row_num, column=7, value=float(movement.quantity))
-            ws.cell(row=row_num, column=8, value=float(movement.unit_cost or 0))
-            ws.cell(row=row_num, column=9, value=movement.destination_store.name if movement.destination_store else '')
-            ws.cell(row=row_num, column=10, value=movement.purchase_order.order_number if movement.purchase_order else '')
-            ws.cell(row=row_num, column=11, value=movement.created_by.username if movement.created_by else '')
-            ws.cell(row=row_num, column=12, value=movement.notes or '')
+        for row_num, movement in enumerate(movements_list, 2):
+            entrees = ''
+            sorties = ''
+            
+            if movement.movement_type == 'in':
+                entrees = float(movement.quantity)
+                stock_cumulatif += entrees
+            elif movement.movement_type == 'out':
+                sorties = float(movement.quantity)
+                stock_cumulatif -= sorties
+            
+            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=2, value=movement.product.name)
+            ws.cell(row=row_num, column=3, value=entrees)
+            ws.cell(row=row_num, column=4, value=sorties)
+            ws.cell(row=row_num, column=5, value=stock_cumulatif)
         
         # Auto adjust columns
-        for col_num, col_title in enumerate(columns, 1):
-            ws.column_dimensions[get_column_letter(col_num)].width = 18
+        ws.column_dimensions['A'].width = 15
+        ws.column_dimensions['B'].width = 35
+        ws.column_dimensions['C'].width = 12
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 15
         
         # Generate response
         response = HttpResponse(content_type='application/vnd.ms-excel')
@@ -429,9 +642,6 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
             except ValueError:
                 pass
         
-        # Limit to 100 records for PDF
-        movements = movements[:100]
-        
         # Import necessary libraries
         from reportlab.lib.pagesizes import A4, landscape
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
@@ -441,6 +651,10 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         from datetime import datetime
         from django.utils import timezone
         import io
+        
+        # Sort movements by date (oldest first) for progressive stock calculation
+        # Then limit to 100 records for PDF
+        movements_list = list(movements.order_by('created_at')[:100])
         
         # Create PDF buffer
         buffer = io.BytesIO()
@@ -488,18 +702,28 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         elements.append(Spacer(1, 0.3*inch))
         
         # Table data
-        data = [['Date', 'Référence', 'Produit', 'Fournisseur', 'Type', 'Quantité', 'Coût Unit.', 'Magasin']]
+        data = [['Date', 'Désignation', 'Entrées', 'Sorties', 'Stocks final']]
         
-        for movement in movements:
+        # Calculate progressive stock
+        stock_cumulatif = 0
+        
+        for movement in movements_list:
+            entrees = ''
+            sorties = ''
+            
+            if movement.movement_type == 'in':
+                entrees = str(movement.quantity)
+                stock_cumulatif += float(movement.quantity)
+            elif movement.movement_type == 'out':
+                sorties = str(movement.quantity)
+                stock_cumulatif -= float(movement.quantity)
+            
             row = [
                 movement.created_at.strftime('%d/%m/%Y'),
-                movement.reference[:15] if movement.reference else '-',
-                movement.product.name[:25],
-                (movement.supplier.name[:15] if movement.supplier else '-'),
-                movement.get_movement_type_display(),
-                str(movement.quantity),
-                f"{movement.unit_cost or 0:.2f}",
-                movement.store.name[:15]
+                movement.product.name[:40],
+                entrees,
+                sorties,
+                f"{stock_cumulatif:.0f}"
             ]
             data.append(row)
         
@@ -528,10 +752,11 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         
         # Statistics
         elements.append(Spacer(1, 0.3*inch))
-        total_qty = sum(m.quantity for m in movements)
-        total_value = sum((m.unit_cost or 0) * m.quantity for m in movements)
+        total_entrees = sum(m.quantity for m in movements_list if m.movement_type == 'in')
+        total_sorties = sum(m.quantity for m in movements_list if m.movement_type == 'out')
+        stock_final = total_entrees - total_sorties
         
-        stats_text = f"<b>Total mouvements:</b> {movements.count()} | <b>Quantité totale:</b> {total_qty} | <b>Valeur totale:</b> {total_value:.2f} FCFA"
+        stats_text = f"<b>Total mouvements:</b> {len(movements_list)} | <b>Total Entrées:</b> {total_entrees:.0f} | <b>Total Sorties:</b> {total_sorties:.0f} | <b>Stock final:</b> {stock_final:.0f}"
         stats = Paragraph(stats_text, date_style)
         elements.append(stats)
         
@@ -567,6 +792,27 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     search_fields = ['transfer_number', 'source_store__name', 'destination_store__name', 'lines__product__name']
     ordering_fields = ['transfer_date', 'created_at']
     ordering = ['-created_at']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'assigned':
+                from django.db.models import Q
+                return queryset.filter(
+                    Q(source_store__in=user.assigned_stores.all()) |
+                    Q(destination_store__in=user.assigned_stores.all())
+                )
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        return queryset.filter(created_by=user)
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -798,6 +1044,23 @@ class InventoryViewSet(viewsets.ModelViewSet):
     search_fields = ['inventory_number']
     ordering_fields = ['inventory_date', 'created_at']
     ordering = ['-created_at']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'assigned':
+                return queryset.filter(store__in=user.assigned_stores.all())
+            elif user.role.access_scope == 'own':
+                return queryset.filter(created_by=user)
+        
+        return queryset.filter(created_by=user)
     
     def get_serializer_class(self):
         if self.action == 'list':

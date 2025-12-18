@@ -134,9 +134,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=user)
     
     @extend_schema(summary="Envoyer une facture par email", tags=["Invoicing"])
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def send_email(self, request, pk=None):
-        """Send invoice by email."""
+        """Send invoice by email. Users can send their own invoices."""
         invoice = self.get_object()
         
         if invoice.status == 'draft':
@@ -152,9 +152,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return Response({'message': 'Facture envoyée par email'})
     
     @extend_schema(summary="Générer le PDF d'une facture", tags=["Invoicing"])
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=['get'], permission_classes=[IsAuthenticated])
     def generate_pdf(self, request, pk=None):
-        """Generate invoice PDF."""
+        """Generate invoice PDF. Users can generate PDF for their own invoices."""
         invoice = self.get_object()
         
         buffer = invoice.generate_pdf()
@@ -165,9 +165,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return response
     
     @extend_schema(summary="Enregistrer un paiement", tags=["Invoicing"])
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def record_payment(self, request, pk=None):
-        """Record a payment for this invoice."""
+        """Record a payment for this invoice. Users can record payments for their own invoices."""
         invoice = self.get_object()
         
         if invoice.status == 'cancelled':
@@ -406,3 +406,20 @@ class InvoicePaymentViewSet(viewsets.ModelViewSet):
     filterset_fields = ['invoice', 'payment_method', 'payment_date']
     ordering_fields = ['payment_date', 'amount']
     ordering = ['-payment_date']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'assigned':
+                return queryset.filter(invoice__store__in=user.assigned_stores.all())
+            elif user.role.access_scope == 'own':
+                return queryset.filter(invoice__created_by=user)
+        
+        return queryset.filter(invoice__created_by=user)

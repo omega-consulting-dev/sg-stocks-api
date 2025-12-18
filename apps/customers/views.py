@@ -27,12 +27,13 @@ from apps.invoicing.models import Invoice, InvoicePayment
 
 class CustomerViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for Customer management.
-    Supports full CRUD operations, search, filtering, import and export.
+    ViewSet for Customer management with role-based filtering.
+    - Super admin / Manager (access_scope='all'): voit tous les clients
+    - Magasinier (access_scope='assigned'): voit les clients de ses stores
+    - Caissier (access_scope='own'): voit uniquement les clients qu'il a créés ou avec qui il a fait des transactions
     """
     queryset = Customer.objects.filter(is_active=True)
-    permission_classes = [IsAuthenticated, HasModulePermission]
-    module_name = 'customers'
+    permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = CustomerFilter
@@ -40,8 +41,109 @@ class CustomerViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'customer_code', 'created_at', 'credit_limit', 'city']
     ordering = ['name']
     
+    def get_queryset(self):
+        """
+        Filtrage sécurisé des clients selon le rôle et access_scope.
+        Les caissiers voient uniquement leurs propres clients.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            return queryset
+        
+        # Vérifier le scope d'accès du rôle
+        if hasattr(user, 'role') and user.role:
+            # Manager avec accès à tous les clients
+            if user.role.access_scope == 'all':
+                return queryset
+            
+            # Magasinier: clients des stores assignés (via ventes dans ces stores)
+            elif user.role.access_scope == 'assigned':
+                assigned_stores = user.assigned_stores.all()
+                if assigned_stores.exists():
+                    # Importer ici pour éviter les imports circulaires
+                    from apps.sales.models import Sale
+                    from apps.invoicing.models import Invoice
+                    
+                    # Clients avec ventes dans les stores assignés
+                    customer_ids_from_sales = Sale.objects.filter(
+                        store__in=assigned_stores
+                    ).values_list('customer_id', flat=True).distinct()
+                    
+                    # Clients avec factures dans les stores assignés
+                    customer_ids_from_invoices = Invoice.objects.filter(
+                        store__in=assigned_stores
+                    ).values_list('customer_id', flat=True).distinct()
+                    
+                    # Union des clients + ceux créés par l'utilisateur
+                    return queryset.filter(
+                        Q(id__in=customer_ids_from_sales) |
+                        Q(id__in=customer_ids_from_invoices) |
+                        Q(created_by=user)
+                    ).distinct()
+                else:
+                    return queryset.filter(created_by=user)
+            
+            # Caissier: uniquement clients créés par lui ou avec qui il a fait des transactions
+            elif user.role.access_scope == 'own':
+                from apps.sales.models import Sale
+                from apps.invoicing.models import Invoice
+                
+                # Clients des ventes créées par le caissier
+                customer_ids_from_sales = Sale.objects.filter(
+                    created_by=user
+                ).values_list('customer_id', flat=True).distinct()
+                
+                # Clients des factures créées par le caissier
+                customer_ids_from_invoices = Invoice.objects.filter(
+                    created_by=user
+                ).values_list('customer_id', flat=True).distinct()
+                
+                # Union des clients + ceux créés directement par le caissier
+                return queryset.filter(
+                    Q(id__in=customer_ids_from_sales) |
+                    Q(id__in=customer_ids_from_invoices) |
+                    Q(created_by=user)
+                ).distinct()
+        
+        # Par défaut, filtrer par créateur (sécurité)
+        return queryset.filter(created_by=user)
+    
+    def perform_create(self, serializer):
+        """Enregistrer le créateur du client."""
+        # Vérifier la permission
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_customers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de créer des clients.")
+        
+        serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        """Vérifier la permission avant la mise à jour."""
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_customers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de modifier des clients.")
+        
+        serializer.save()
+    
     def perform_destroy(self, instance):
         """Soft delete: désactiver au lieu de supprimer."""
+        # Vérifier la permission
+        user = self.request.user
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if not user.role.can_manage_customers:
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("Vous n'avez pas la permission de supprimer des clients.")
+        
         instance.is_active = False
         instance.save()
     
@@ -200,10 +302,10 @@ class CustomerViewSet(viewsets.ModelViewSet):
         Liste les clients avec solde dû pour le tenant courant.
         GET /api/v1/customers/customers/debts/
         Retourne les clients liés à des factures avec un solde non réglé.
-        Les données sont automatiquement filtrées par le tenant actuel (django-tenants).
+        Les données sont automatiquement filtrées par access_scope (own/assigned/all).
         """
-        # Récupérer tous les clients et calculer leur balance via get_balance()
-        customers = Customer.objects.filter(is_active=True)
+        # Utiliser get_queryset() pour respecter le filtrage par access_scope
+        customers = self.get_queryset()
         
         data = []
         for customer in customers:
@@ -300,7 +402,8 @@ class CustomerViewSet(viewsets.ModelViewSet):
         
         # Vérifier le montant
         try:
-            total_amount = Decimal(str(amount))
+            # Convertir en Decimal et arrondir à 2 décimales pour éviter les problèmes de précision
+            total_amount = Decimal(str(amount)).quantize(Decimal('0.01'))
         except (ValueError, InvalidOperation):
             return Response(
                 {'error': 'Montant invalide'},

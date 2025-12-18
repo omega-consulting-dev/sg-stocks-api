@@ -51,3 +51,11 @@ class AuditModel(TimeStampedModel):
     
     class Meta:
         abstract = True
+
+
+class BaseModel(TimeStampedModel, ActiveModel):
+    """
+    Base model combining TimeStampedModel and ActiveModel.
+    """
+    class Meta:
+        abstract = True

@@ -8,6 +8,104 @@ from django.contrib.auth.signals import user_logged_in, user_logged_out
 from apps.accounts.models import User, UserActivity, UserSession
 
 
+# ============= NOTIFICATIONS AUTOMATIQUES =============
+
+@receiver(post_save, sender='invoicing.InvoicePayment')
+def notify_customer_payment(sender, instance, created, **kwargs):
+    """Notifier lors d'un paiement client - uniquement le créateur"""
+    if created and hasattr(instance, 'created_by') and instance.created_by:
+        from core.notifications import notify_payment_received
+        
+        # Notifier uniquement l'utilisateur qui a créé le paiement
+        notify_payment_received(
+            user=instance.created_by,
+            client_name=instance.invoice.customer.name,
+            client_id=instance.invoice.customer.id,
+            amount=float(instance.amount)
+        )
+
+
+
+@receiver(post_save, sender='suppliers.SupplierPayment')
+def notify_supplier_payment(sender, instance, created, **kwargs):
+    """Notifier lors d'un paiement fournisseur - uniquement le créateur"""
+    if created and hasattr(instance, 'created_by') and instance.created_by:
+        from core.notifications import notify_payment_received
+        
+        # Notifier uniquement l'utilisateur qui a créé le paiement
+        notify_payment_received(
+            user=instance.created_by,
+            client_name=instance.supplier.name,
+            client_id=instance.supplier.id,
+            amount=float(instance.amount)
+        )
+
+
+@receiver(post_save, sender='invoicing.Invoice')
+def notify_invoice_status_change(sender, instance, created, **kwargs):
+    """Notifier lors de la création ou du changement de statut d'une facture - uniquement le créateur"""
+    if created and hasattr(instance, 'created_by') and instance.created_by:
+        from core.notifications import notify_invoice_created
+        
+        # Notifier uniquement l'utilisateur qui a créé la facture
+        notify_invoice_created(
+            user=instance.created_by,
+            invoice_number=instance.invoice_number,
+            client_name=instance.customer.name,
+            amount=float(instance.total_amount)
+        )
+    
+    elif instance.status == 'paid' and instance.paid_amount >= instance.total_amount:
+        from core.notifications import notify_invoice_paid
+        
+        # Notifier l'utilisateur qui a créé la facture
+        if hasattr(instance, 'created_by') and instance.created_by:
+            notify_invoice_paid(
+                user=instance.created_by,
+                invoice_number=instance.invoice_number,
+                client_name=instance.customer.name,
+                amount=float(instance.total_amount)
+            )
+
+
+@receiver(post_save, sender='products.Product')
+def notify_stock_issues(sender, instance, created, **kwargs):
+    """Notifier lors de problèmes de stock - uniquement admin et managers avec access_scope='all'"""
+    if not created:  # Seulement sur mise à jour
+        from core.notifications import notify_stock_rupture, notify_stock_low
+        
+        # Récupérer uniquement les admin/managers (access_scope='all')
+        # Les caissiers et magasiniers ne doivent pas être notifiés de tous les stocks
+        users = User.objects.filter(
+            is_active=True,
+            role__can_manage_inventory=True,
+            role__access_scope='all'  # Uniquement admin/manager
+        )
+        
+        # Rupture de stock
+        if instance.stock_quantity == 0:
+            for user in users:
+                notify_stock_rupture(
+                    user=user,
+                    product_name=instance.name,
+                    product_id=instance.id
+                )
+        # Stock faible
+        elif hasattr(instance, 'reorder_level') and instance.reorder_level:
+            if instance.stock_quantity <= instance.reorder_level:
+                for user in users:
+                    notify_stock_low(
+                        user=user,
+                        product_name=instance.name,
+                        product_id=instance.id,
+                        current_quantity=instance.stock_quantity,
+                        reorder_level=instance.reorder_level
+                    )
+
+
+# ============= USER MANAGEMENT SIGNALS =============
+
+
 @receiver(pre_save, sender=User)
 def generate_codes(sender, instance, **kwargs):
     """

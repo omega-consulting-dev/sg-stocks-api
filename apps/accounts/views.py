@@ -323,6 +323,20 @@ class RoleViewSet(viewsets.ModelViewSet):
     ordering = ['display_name']
     
     @extend_schema(
+        summary="Choix de rôles disponibles",
+        description="Récupère la liste des choix de rôles prédéfinis.",
+        tags=["Rôles"]
+    )
+    @action(detail=False, methods=['get'])
+    def choices(self, request):
+        """Get available role choices."""
+        choices = [
+            {'value': choice[0], 'label': choice[1]}
+            for choice in Role.ROLE_CHOICES
+        ]
+        return Response(choices)
+    
+    @extend_schema(
         summary="Utilisateurs d'un rôle",
         description="Récupère la liste des utilisateurs ayant ce rôle.",
         tags=["Rôles"]

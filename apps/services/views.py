@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
-from django.db.models import Count, Sum
+from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from django.http import HttpResponse
 import io
@@ -494,6 +494,23 @@ class ServiceInterventionViewSet(viewsets.ModelViewSet):
     search_fields = ['service__name', 'customer__username', 'notes']
     ordering_fields = ['scheduled_date', 'created_at']
     ordering = ['-scheduled_date']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        if user.is_superuser:
+            return queryset
+        
+        if hasattr(user, 'role') and user.role:
+            if user.role.access_scope == 'all':
+                return queryset
+            elif user.role.access_scope == 'own':
+                # Voir les interventions créées par soi OU assignées à soi
+                from django.db.models import Q
+                return queryset.filter(Q(created_by=user) | Q(assigned_to=user))
+        
+        return queryset.filter(Q(created_by=user) | Q(assigned_to=user))
     
     def get_serializer_class(self):
         if self.action == 'list':
