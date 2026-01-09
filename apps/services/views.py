@@ -13,7 +13,6 @@ from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from django.http import HttpResponse
 import io
-import csv
 import pandas as pd
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
@@ -40,7 +39,10 @@ from core.utils.export_utils import ExcelExporter, PDFExporter
 class ServiceCategoryViewSet(viewsets.ModelViewSet):
     """ViewSet for ServiceCategory model."""
     
-    queryset = ServiceCategory.objects.filter(is_active=True)
+    queryset = ServiceCategory.objects.filter(is_active=True).select_related('created_by', 'updated_by').only(
+        'id', 'name', 'description', 'is_active', 'created_at', 'updated_at',
+        'created_by__id', 'created_by__username', 'updated_by__id', 'updated_by__username'
+    )
     serializer_class = ServiceCategorySerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'services'
@@ -245,7 +247,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     filterset_fields = ['category', 'is_active']
     search_fields = ['name', 'reference', 'description']
     ordering_fields = ['name', 'reference', 'unit_price', 'created_at']
-    ordering = ['-created_at']
+    ordering = ['created_at']
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -493,7 +495,7 @@ class ServiceInterventionViewSet(viewsets.ModelViewSet):
     filterset_fields = ['service', 'customer', 'assigned_to', 'status', 'scheduled_date']
     search_fields = ['service__name', 'customer__username', 'notes']
     ordering_fields = ['scheduled_date', 'created_at']
-    ordering = ['-scheduled_date']
+    ordering = ['scheduled_date']
     
     def get_queryset(self):
         queryset = super().get_queryset()

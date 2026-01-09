@@ -46,12 +46,15 @@ class ProductListSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     primary_image = serializers.SerializerMethodField()
     current_stock = serializers.IntegerField(read_only=True)
+    is_low_stock = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = Product
         fields = [
-            'id', 'reference', 'name', 'category_name', 'selling_price',
-            'primary_image', 'current_stock', 'is_active', 'is_for_sale'
+            'id', 'reference', 'name', 'category', 'category_name', 
+            'selling_price', 'minimum_stock', 'optimal_stock',
+            'primary_image', 'current_stock', 'is_low_stock', 
+            'is_active', 'is_for_sale'
         ]
     
     def get_primary_image(self, obj):
@@ -93,6 +96,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
 class ProductCreateUpdateSerializer(serializers.ModelSerializer):
     """Serializer for product creation and update."""
     
+    primary_image = serializers.ImageField(write_only=True, required=False)
+    
     class Meta:
         model = Product
         fields = [
@@ -100,7 +105,7 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
             'cost_price', 'selling_price', 'tax_rate',
             'minimum_stock', 'optimal_stock', 'product_type',
             'is_for_sale', 'is_for_purchase', 'is_active',
-            'weight', 'volume'
+            'weight', 'volume', 'primary_image'
         ]
     
     def validate_reference(self, value):
@@ -131,3 +136,49 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
             })
         
         return data
+    
+    def create(self, validated_data):
+        """Create product with primary image."""
+        from apps.products.models import ProductImage
+        
+        # Extraire l'image si elle existe
+        primary_image = validated_data.pop('primary_image', None)
+        
+        # Créer le produit
+        product = super().create(validated_data)
+        
+        # Créer l'image principale si fournie
+        if primary_image:
+            ProductImage.objects.create(
+                product=product,
+                image=primary_image,
+                is_primary=True,
+                order=0
+            )
+        
+        return product
+    
+    def update(self, instance, validated_data):
+        """Update product with primary image."""
+        from apps.products.models import ProductImage
+        
+        # Extraire l'image si elle existe
+        primary_image = validated_data.pop('primary_image', None)
+        
+        # Mettre à jour le produit
+        product = super().update(instance, validated_data)
+        
+        # Mettre à jour l'image principale si fournie
+        if primary_image:
+            # Supprimer l'ancienne image principale
+            ProductImage.objects.filter(product=product, is_primary=True).delete()
+            
+            # Créer la nouvelle image principale
+            ProductImage.objects.create(
+                product=product,
+                image=primary_image,
+                is_primary=True,
+                order=0
+            )
+        
+        return product

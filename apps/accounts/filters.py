@@ -22,8 +22,8 @@ class UserFilter(django_filters.FilterSet):
     role = django_filters.NumberFilter(field_name='role__id')
     role_name = django_filters.CharFilter(field_name='role__name')
     
-    # Store filter
-    assigned_store = django_filters.NumberFilter(field_name='assigned_stores__id')
+    # Store filter - COMMENTÉ car assigned_stores est temporairement désactivé
+    # assigned_store = django_filters.NumberFilter(field_name='assigned_stores__id')
     
     # Employee filter
     employee_id = django_filters.CharFilter(lookup_expr='icontains')
@@ -38,7 +38,7 @@ class UserFilter(django_filters.FilterSet):
             'is_active': ['exact'],
             'is_staff': ['exact'],
             'role': ['exact'],
-            'assigned_stores': ['exact'],
+            # 'assigned_stores': ['exact'],  # COMMENTÉ car champ temporairement désactivé
             'employee_id': ['exact', 'icontains'],
             'date_joined': ['gte', 'lte'],
             'hire_date': ['gte', 'lte'],

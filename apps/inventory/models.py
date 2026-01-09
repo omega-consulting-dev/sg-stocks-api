@@ -192,13 +192,13 @@ class StockMovement(ActiveModel, AuditModel):
     )
     
     # Receipt number for stock entries (RECEIPT-001, RECEIPT-002, etc.)
+    # Plusieurs produits peuvent avoir le même numéro de bon (un bon = plusieurs lignes)
     receipt_number = models.CharField(
         max_length=50, 
         blank=True, 
-        unique=True,
         null=True,
         verbose_name="Numéro de pièce", 
-        help_text="Numéro de la pièce d'entrée en stock"
+        help_text="Numéro de la pièce d'entrée en stock (un bon peut contenir plusieurs produits)"
     )
     
     # Reference to source document (e.g., delivery note, invoice)
@@ -216,6 +216,14 @@ class StockMovement(ActiveModel, AuditModel):
     
     # Notes
     notes = models.TextField(blank=True, verbose_name="Notes")
+    
+    # Date de réalisation du mouvement (différente de created_at qui est la date de saisie)
+    date = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Date de réalisation",
+        help_text="Date à laquelle le mouvement de stock a été réalisé (peut être différente de la date de saisie)"
+    )
     
     class Meta:
         verbose_name = "Mouvement de stock"
@@ -239,6 +247,7 @@ class StockTransfer(AuditModel):
     ]
     
     transfer_number = models.CharField(max_length=50, unique=True, verbose_name="Numéro de transfert")
+    reference = models.CharField(max_length=100, blank=True, verbose_name="Référence")
     source_store = models.ForeignKey(
         Store,
         on_delete=models.PROTECT,

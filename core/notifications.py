@@ -102,8 +102,8 @@ def notify_stock_low(user, product_name, product_id, current_quantity, reorder_l
         data={
             'product_id': product_id,
             'product_name': product_name,
-            'current_quantity': current_quantity,
-            'reorder_level': reorder_level
+            'current_quantity': float(current_quantity),
+            'reorder_level': float(reorder_level)
         },
         action_url=f'/inventory/products/{product_id}'
     )
@@ -156,6 +156,25 @@ def notify_transfer_validated(user, transfer_id, from_warehouse, to_warehouse):
             'transfer_id': transfer_id,
             'from_warehouse': from_warehouse,
             'to_warehouse': to_warehouse
+        },
+        action_url=f'/inventory/transfers/{transfer_id}'
+    )
+
+
+def notify_transfer_received(user, transfer_id, transfer_number, from_warehouse, to_warehouse, total_items):
+    """Notifier la réception d'un transfert de stock"""
+    return create_notification(
+        user=user,
+        notification_type='transfer_received',
+        title='📦 Transfert de stock reçu',
+        message=f'Transfert {transfer_number} reçu : {total_items} article(s) transféré(s) de "{from_warehouse}" vers "{to_warehouse}".',
+        priority='medium',
+        data={
+            'transfer_id': transfer_id,
+            'transfer_number': transfer_number,
+            'from_warehouse': from_warehouse,
+            'to_warehouse': to_warehouse,
+            'total_items': total_items
         },
         action_url=f'/inventory/transfers/{transfer_id}'
     )

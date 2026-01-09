@@ -34,6 +34,10 @@ class ProductCategory(ActiveModel, AuditModel):
         verbose_name = "Catégorie de produit"
         verbose_name_plural = "Catégories de produits"
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'name']),
+            models.Index(fields=['created_at']),
+        ]
     
     def __str__(self):
         return self.name
@@ -146,6 +150,14 @@ class Product(ActiveModel, AuditModel):
         verbose_name = "Produit"
         verbose_name_plural = "Produits"
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'category']),
+            models.Index(fields=['is_active', 'name']),
+            models.Index(fields=['reference']),
+            models.Index(fields=['barcode']),
+            models.Index(fields=['created_at']),
+            models.Index(fields=['is_for_sale', 'is_active']),
+        ]
     
     def __str__(self):
         return f"{self.reference} - {self.name}"

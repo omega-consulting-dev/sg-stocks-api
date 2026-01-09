@@ -184,7 +184,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             stats = queryset.values('category__name').annotate(
                 total_amount=Sum('amount'),
                 count=Count('id')
-            ).order_by('-total_amount')
+            ).order_by('total_amount')
             
             result = [
                 {
@@ -199,7 +199,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             expenses = queryset.values(
                 'id', 'expense_number', 'expense_date', 'description',
                 'amount', 'beneficiary', 'category__name'
-            ).order_by('-expense_date')
+            ).order_by('expense_date')
             
             result = [
                 {
@@ -215,6 +215,38 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             ]
         
         return Response(result)
+    
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get summary statistics for all expenses."""
+        user = request.user
+        
+        # Use get_queryset to respect user permissions
+        queryset = self.get_queryset()
+        
+        # Calculate totals
+        total_amount = queryset.aggregate(total=Sum('amount'))['total'] or 0
+        total_paid = queryset.filter(status='paid').aggregate(total=Sum('amount'))['total'] or 0
+        total_pending = queryset.filter(
+            status__in=['draft', 'pending', 'approved']
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        
+        # Count by status
+        counts = {
+            'total': queryset.count(),
+            'draft': queryset.filter(status='draft').count(),
+            'pending': queryset.filter(status='pending').count(),
+            'approved': queryset.filter(status='approved').count(),
+            'paid': queryset.filter(status='paid').count(),
+            'rejected': queryset.filter(status='rejected').count(),
+        }
+        
+        return Response({
+            'total_amount': float(total_amount),
+            'total_paid': float(total_paid),
+            'total_pending': float(total_pending),
+            'counts': counts
+        })
     
     @action(detail=False, methods=['get'], url_path='stats/export_excel')
     def export_stats_excel(self, request):
@@ -246,7 +278,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             stats = queryset.values('category__name').annotate(
                 total_amount=Sum('amount'),
                 count=Count('id')
-            ).order_by('-total_amount')
+            ).order_by('total_amount')
             
             for row_num, item in enumerate(stats, 2):
                 ws.cell(row=row_num, column=1, value=item['category__name'])
@@ -256,7 +288,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             columns = ['N° Dépense', 'Date', 'Catégorie', 'Bénéficiaire', 'Description', 'Montant']
             ExcelExporter.style_header(ws, columns)
             
-            expenses = queryset.order_by('-expense_date')
+            expenses = queryset.order_by('expense_date')
             
             for row_num, expense in enumerate(expenses, 2):
                 ws.cell(row=row_num, column=1, value=expense.expense_number)
@@ -318,7 +350,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             stats = queryset.values('category__name').annotate(
                 total_amount=Sum('amount'),
                 count=Count('id')
-            ).order_by('-total_amount')
+            ).order_by('total_amount')
             
             for item in stats:
                 data.append([
@@ -329,7 +361,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         else:
             data = [['N° Dépense', 'Date', 'Catégorie', 'Montant']]
             
-            expenses = queryset.order_by('-expense_date')[:100]  # Limit for PDF
+            expenses = queryset.order_by('expense_date')[:100]  # Limit for PDF
             
             for expense in expenses:
                 data.append([

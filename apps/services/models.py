@@ -18,6 +18,10 @@ class ServiceCategory(ActiveModel, AuditModel):
         verbose_name = "Catégorie de service"
         verbose_name_plural = "Catégories de services"
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'name']),
+            models.Index(fields=['created_at']),
+        ]
     
     def __str__(self):
         return self.name
@@ -29,7 +33,7 @@ class Service(ActiveModel, AuditModel):
     """
     # Basic information
     name = models.CharField(max_length=200, verbose_name="Nom")
-    description = models.TextField(verbose_name="Description détaillée")
+    description = models.TextField(blank=True, verbose_name="Description détaillée")
     reference = models.CharField(
         max_length=50,
         unique=True,

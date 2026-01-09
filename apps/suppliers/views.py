@@ -185,6 +185,40 @@ class SupplierViewSet(viewsets.ModelViewSet):
         data.sort(key=lambda x: x['balance'], reverse=True)
         return Response(data)
 
+    @action(detail=True, methods=['get'], url_path='purchase-orders-with-debt')
+    def purchase_orders_with_debt(self, request, pk=None):
+        """
+        Retourne la liste des purchase orders avec dette pour un fournisseur spécifique.
+        GET /api/v1/suppliers/{id}/purchase-orders-with-debt/
+        """
+        supplier = self.get_object()
+        
+        # Récupérer les commandes confirmées ou reçues avec un solde dû
+        statuses = ['confirmed', 'received']
+        purchase_orders = supplier.purchase_orders.filter(
+            status__in=statuses
+        ).annotate(
+            balance_calc=F('total_amount') - F('paid_amount')
+        ).filter(balance_calc__gt=0).order_by('order_date')
+        
+        data = []
+        for po in purchase_orders:
+            # Utiliser actual_delivery si disponible, sinon expected_delivery
+            delivery_date = po.actual_delivery if po.actual_delivery else po.expected_delivery
+            
+            data.append({
+                'id': po.id,
+                'order_number': po.order_number,
+                'order_date': po.order_date.isoformat() if po.order_date else None,
+                'delivery_date': delivery_date.isoformat() if delivery_date else None,
+                'due_date': po.due_date.isoformat() if po.due_date else None,
+                'total_amount': float(po.total_amount),
+                'paid_amount': float(po.paid_amount),
+                'balance_due': float(po.total_amount - po.paid_amount),
+                'status': po.status
+            })
+        
+        return Response(data)
     
     @action(detail=False, methods=['get'])
     def export_excel(self, request):
@@ -433,7 +467,7 @@ class SupplierPaymentViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'options']
     filterset_fields = ['supplier', 'payment_method', 'payment_date']
     ordering_fields = ['payment_date', 'amount', 'created_at']
-    ordering = ['-payment_date']
+    ordering = ['payment_date']
     pagination_class = None  # Désactiver la pagination pour avoir tous les paiements
 
     def get_queryset(self):

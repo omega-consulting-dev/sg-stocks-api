@@ -155,7 +155,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
             'total_value', 'invoice_amount', 'receipt_number', 'reference', 'destination_store', 'destination_store_name',
             'purchase_order', 'purchase_order_number', 'invoice', 'payment_info',
             'is_debt', 'due_date', 'payment_amount', 'payment_date', 'payment_method',
-            'notes', 'created_at', 'created_by', 'created_by_name'
+            'notes', 'date', 'created_at', 'created_by', 'created_by_name'
         ]
         read_only_fields = ['created_at', 'created_by', 'created_by_name', 'customer_name', 'payment_info']
     
@@ -203,16 +203,6 @@ class StockMovementSerializer(serializers.ModelSerializer):
         payment_amount = data.get('payment_amount')
         product = data.get('product')
         quantity = data.get('quantity')
-        
-        # Fournisseur obligatoire pour les entrées
-        if movement_type == 'in' and not supplier:
-            raise serializers.ValidationError({
-                'supplier': (
-                    'Le fournisseur est obligatoire pour les entrées en stock. '
-                    'Si le fournisseur n\'existe pas, veuillez d\'abord le créer '
-                    'dans le module Fournisseurs.'
-                )
-            })
         
         # Montant versé obligatoire pour les entrées en stock
         if movement_type == 'in' and payment_amount is None:
@@ -418,7 +408,7 @@ class StockTransferListSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransfer
         fields = [
-            'id', 'transfer_number', 'source_store', 'source_store_name',
+            'id', 'transfer_number', 'reference', 'source_store', 'source_store_name',
             'destination_store', 'destination_store_name', 'status',
             'status_display', 'transfer_date', 'lines_count', 'products', 'created_at'
         ]
@@ -431,6 +421,8 @@ class StockTransferListSerializer(serializers.ModelSerializer):
 class StockTransferDetailSerializer(serializers.ModelSerializer):
     """Serializer for StockTransfer detail view."""
     
+    source_store_name = serializers.CharField(source='source_store.name', read_only=True)
+    destination_store_name = serializers.CharField(source='destination_store.name', read_only=True)
     source_store_detail = StoreMinimalSerializer(source='source_store', read_only=True)
     destination_store_detail = StoreMinimalSerializer(source='destination_store', read_only=True)
     lines = StockTransferLineSerializer(many=True, read_only=True)
@@ -439,8 +431,8 @@ class StockTransferDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransfer
         fields = [
-            'id', 'transfer_number', 'source_store', 'source_store_detail',
-            'destination_store', 'destination_store_detail', 'status',
+            'id', 'transfer_number', 'reference', 'source_store', 'source_store_name', 'source_store_detail',
+            'destination_store', 'destination_store_name', 'destination_store_detail', 'status',
             'status_display', 'transfer_date', 'expected_arrival',
             'actual_arrival', 'validated_by', 'received_by', 'notes',
             'lines', 'created_at', 'updated_at'
@@ -456,9 +448,10 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransfer
         fields = [
-            'source_store', 'destination_store', 'transfer_date',
-            'expected_arrival', 'notes', 'lines'
+            'transfer_number', 'reference', 'source_store', 'destination_store', 'transfer_date',
+            'expected_arrival', 'status', 'notes', 'lines'
         ]
+        read_only_fields = ['transfer_number']
     
     def validate(self, data):
         """Valider que les quantités demandées sont disponibles."""
@@ -506,11 +499,55 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
         ).count() + 1
         validated_data['transfer_number'] = f"TR{timezone.now().year}{count:05d}"
         
+        # Si le statut est in_transit, mettre à jour les stocks automatiquement
+        status = validated_data.get('status', 'draft')
+        
         transfer = StockTransfer.objects.create(**validated_data)
         
         # Create lines
         for line_data in lines_data:
-            StockTransferLine.objects.create(transfer=transfer, **line_data)
+            line = StockTransferLine.objects.create(transfer=transfer, **line_data)
+            
+            # Si le transfert est directement en transit, déduire du stock source et ajouter au stock destination
+            if status == 'in_transit':
+                line.quantity_sent = line.quantity_requested
+                line.quantity_received = line.quantity_requested
+                line.save()
+                
+                from apps.inventory.models import Stock
+                
+                # Déduire du stock source
+                try:
+                    stock_source = Stock.objects.get(
+                        product=line.product,
+                        store=transfer.source_store
+                    )
+                    stock_source.quantity -= line.quantity_sent
+                    stock_source.save()
+                except Stock.DoesNotExist:
+                    pass
+                
+                # Ajouter au stock destination
+                try:
+                    stock_dest = Stock.objects.get(
+                        product=line.product,
+                        store=transfer.destination_store
+                    )
+                    stock_dest.quantity += line.quantity_received
+                    stock_dest.save()
+                except Stock.DoesNotExist:
+                    # Créer le stock si inexistant
+                    Stock.objects.create(
+                        product=line.product,
+                        store=transfer.destination_store,
+                        quantity=line.quantity_received
+                    )
+        
+        # Marquer le transfert comme reçu automatiquement
+        if status == 'in_transit':
+            transfer.status = 'received'
+            transfer.actual_arrival = timezone.now().date()
+            transfer.save()
         
         return transfer
 

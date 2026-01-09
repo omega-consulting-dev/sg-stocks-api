@@ -11,6 +11,7 @@ from apps.accounts.permissions import HasModulePermission
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from django.db.models import Sum, F, Q
+from django.db import transaction
 from django.utils import timezone
 from django.http import HttpResponse
 import django_filters
@@ -156,7 +157,156 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ['product', 'store']
     search_fields = ['product__name', 'product__reference']
     ordering_fields = ['quantity', 'created_at']
-    ordering = ['-created_at']
+    ordering = ['created_at']
+    
+    def list(self, request, *args, **kwargs):
+        """Override list to support historical stock calculation."""
+        date_to = request.query_params.get('date_to')
+        date_from = request.query_params.get('date_from')
+        
+        if date_to or date_from:
+            # Calculate historical stock for the specified period
+            return self.calculate_historical_stocks(date_from, date_to, request)
+        
+        # Default behavior for current stocks
+        return super().list(request, *args, **kwargs)
+    
+    def calculate_historical_stocks(self, date_from, date_to, request):
+        """Calculate stock quantities for a specific period."""
+        from datetime import datetime
+        from django.db.models import Sum, Q
+        from decimal import Decimal
+        from django.utils import timezone as django_timezone
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Calculating historical stocks - from: {date_from}, to: {date_to}")
+        
+        # Parse and validate dates
+        target_date_start = None
+        target_date_end = None
+        
+        try:
+            if date_from:
+                target_date_start = datetime.strptime(date_from, '%Y-%m-%d')
+                target_date_start = target_date_start.replace(hour=0, minute=0, second=0)
+                target_date_start = django_timezone.make_aware(target_date_start, django_timezone.get_current_timezone())
+                logger.info(f"Start date parsed: {target_date_start}")
+            
+            if date_to:
+                target_date_end = datetime.strptime(date_to, '%Y-%m-%d')
+                target_date_end = target_date_end.replace(hour=23, minute=59, second=59)
+                target_date_end = django_timezone.make_aware(target_date_end, django_timezone.get_current_timezone())
+                logger.info(f"End date parsed: {target_date_end}")
+        except ValueError as e:
+            logger.error(f"Invalid date format, error: {e}")
+            return Response(
+                {'error': 'Invalid date format. Use YYYY-MM-DD'},
+                status=400
+            )
+        
+        # Get all product-store combinations
+        stocks = Stock.objects.select_related('product', 'store').all()
+        
+        # Apply filters
+        product_filter = request.query_params.get('product')
+        store_filter = request.query_params.get('store')
+        search_filter = request.query_params.get('search')
+        
+        if product_filter:
+            stocks = stocks.filter(product_id=product_filter)
+            logger.info(f"Filtering by product: {product_filter}")
+        if store_filter:
+            stocks = stocks.filter(store_id=store_filter)
+            logger.info(f"Filtering by store: {store_filter}")
+        if search_filter:
+            stocks = stocks.filter(
+                Q(product__name__icontains=search_filter) | 
+                Q(product__reference__icontains=search_filter)
+            )
+            logger.info(f"Filtering by search: {search_filter}")
+        
+        logger.info(f"Total stocks to process: {stocks.count()}")
+        historical_stocks = []
+        
+        for stock in stocks:
+            # Build movement filter - calcul jusqu'à la date de fin (tous les mouvements avant date_to)
+            # On utilise le champ 'date' (date de réalisation) au lieu de 'created_at'
+            movement_filter = Q(
+                product=stock.product,
+                store=stock.store,
+                is_active=True
+            )
+            
+            # Filtrer jusqu'à la date de fin si spécifiée
+            # On veut tous les mouvements AVANT et JUSQU'AU date_to pour avoir le stock à cette date
+            if target_date_end:
+                movement_filter &= Q(date__lte=target_date_end.date())
+            
+            # Optionnellement, commencer à partir d'une date de début
+            # Ceci permet de voir le stock à une période précise si besoin
+            # if target_date_start:
+            #     movement_filter &= Q(date__gte=target_date_start.date())
+            
+            # Calculate movements jusqu'à la date
+            movements = StockMovement.objects.filter(movement_filter)
+            
+            # Sum entries
+            entrees = movements.filter(movement_type='in').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Sum exits
+            sorties = movements.filter(movement_type='out').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Sum transfer outs
+            transferts_out = movements.filter(movement_type='transfer').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Sum transfer ins jusqu'à la date
+            transfer_in_filter = Q(
+                product=stock.product,
+                destination_store=stock.store,
+                movement_type='transfer',
+                is_active=True
+            )
+            if target_date_end:
+                transfer_in_filter &= Q(date__lte=target_date_end.date())
+                
+            transferts_in = StockMovement.objects.filter(transfer_in_filter).aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Calculate historical quantity
+            historical_quantity = entrees - sorties - transferts_out + transferts_in
+            
+            # Create a copy of stock with historical quantity
+            historical_stock = {
+                'id': stock.id,
+                'product': stock.product.id,
+                'product_name': stock.product.name,
+                'product_reference': stock.product.reference or '',
+                'store': stock.store.id,
+                'store_name': stock.store.name,
+                'quantity': float(historical_quantity),
+                'reserved_quantity': 0,  # No reserved quantity for historical data
+                'available_quantity': float(historical_quantity),
+                'created_at': stock.created_at.isoformat(),
+                'updated_at': stock.updated_at.isoformat(),
+            }
+            historical_stocks.append(historical_stock)
+        
+        logger.info(f"Historical stocks calculated: {len(historical_stocks)} items")
+        
+        # Pagination
+        page = self.paginate_queryset(historical_stocks)
+        if page is not None:
+            return self.get_paginated_response(page)
+        
+        return Response(historical_stocks)
     
     @extend_schema(summary="Produits en rupture", tags=["Inventory"])
     @action(detail=False, methods=['get'])
@@ -175,8 +325,105 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['get'])
     def export_excel(self, request):
         """Export stock levels to Excel with filtering."""
-        # Use filter_queryset to apply all configured filters
-        stocks = self.filter_queryset(self.get_queryset())
+        from datetime import datetime
+        from django.db.models import Sum, Q
+        from decimal import Decimal
+        from django.utils import timezone as django_timezone
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        
+        if date_to or date_from:
+            # Calculate historical stocks (sans pagination pour l'export)
+            target_date_start = None
+            target_date_end = None
+            
+            try:
+                if date_from:
+                    target_date_start = datetime.strptime(date_from, '%Y-%m-%d')
+                    target_date_start = target_date_start.replace(hour=0, minute=0, second=0)
+                    target_date_start = django_timezone.make_aware(target_date_start, django_timezone.get_current_timezone())
+                
+                if date_to:
+                    target_date_end = datetime.strptime(date_to, '%Y-%m-%d')
+                    target_date_end = target_date_end.replace(hour=23, minute=59, second=59)
+                    target_date_end = django_timezone.make_aware(target_date_end, django_timezone.get_current_timezone())
+            except ValueError:
+                pass
+            
+            # Get all product-store combinations
+            stocks = Stock.objects.select_related('product', 'store').all()
+            
+            # Apply filters
+            product_filter = request.query_params.get('product')
+            store_filter = request.query_params.get('store')
+            search_filter = request.query_params.get('search')
+            
+            if product_filter:
+                stocks = stocks.filter(product_id=product_filter)
+            if store_filter:
+                stocks = stocks.filter(store_id=store_filter)
+            if search_filter:
+                stocks = stocks.filter(
+                    Q(product__name__icontains=search_filter) | 
+                    Q(product__reference__icontains=search_filter)
+                )
+            
+            stocks_list = []
+            for stock in stocks:
+                # Calculer le stock historique
+                movement_filter = Q(
+                    product=stock.product,
+                    store=stock.store,
+                    is_active=True
+                )
+                
+                if target_date_end:
+                    movement_filter &= Q(date__lte=target_date_end.date())
+                
+                movements = StockMovement.objects.filter(movement_filter)
+                
+                entrees = movements.filter(movement_type='in').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                sorties = movements.filter(movement_type='out').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                transferts_out = movements.filter(movement_type='transfer').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                transfer_in_filter = Q(
+                    product=stock.product,
+                    destination_store=stock.store,
+                    movement_type='transfer',
+                    is_active=True
+                )
+                if target_date_end:
+                    transfer_in_filter &= Q(date__lte=target_date_end.date())
+                    
+                transferts_in = StockMovement.objects.filter(transfer_in_filter).aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                historical_quantity = entrees - sorties - transferts_out + transferts_in
+                
+                stocks_list.append({
+                    'product_name': stock.product.name,
+                    'product_reference': stock.product.reference or '',
+                    'store_name': stock.store.name,
+                    'quantity': float(historical_quantity),
+                    'minimum_stock': stock.product.minimum_stock or 0
+                })
+        else:
+            # Use current stocks with filters
+            stocks = self.filter_queryset(self.get_queryset())
+            stocks_list = stocks
         
         from openpyxl.styles import Font, Alignment, PatternFill
         from openpyxl.utils import get_column_letter
@@ -186,8 +433,9 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
         ws = wb.active
         ws.title = "Inventaire"
         
+        # Colonnes comme dans le tableau frontend
         columns = [
-            'Produit', 'Référence', 'Magasin', 'Statut', 'Stock total'
+            'Référence', 'Produit / Désignation', 'Magasin', 'Stock théorique', 'Stock physique', 'Ecart'
         ]
         
         # Style header
@@ -202,20 +450,32 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
             cell.alignment = Alignment(horizontal='center', vertical='center')
         
         # Add data
-        for row_num, stock in enumerate(stocks, 2):
-            # Determine status
-            if stock.quantity == 0:
-                status = "Rupture"
-            elif stock.quantity < stock.product.minimum_stock:
-                status = "Faible"
+        for row_num, stock in enumerate(stocks_list, 2):
+            # Handle both Stock objects and dictionaries (historical stocks)
+            if isinstance(stock, dict):
+                product_name = stock['product_name']
+                product_reference = stock.get('product_reference', '') or '-'
+                store_name = stock['store_name']
+                quantity = stock['quantity']
             else:
-                status = "Normal"
+                product_name = stock.product.name
+                product_reference = stock.product.reference or '-'
+                store_name = stock.store.name
+                quantity = float(stock.quantity)
             
-            ws.cell(row=row_num, column=1, value=stock.product.name)
-            ws.cell(row=row_num, column=2, value=stock.product.reference or '')
-            ws.cell(row=row_num, column=3, value=stock.store.name)
-            ws.cell(row=row_num, column=4, value=status)
-            ws.cell(row=row_num, column=5, value=float(stock.quantity))
+            # Colonnes du tableau:
+            # 1. Référence
+            ws.cell(row=row_num, column=1, value=product_reference)
+            # 2. Produit / Désignation
+            ws.cell(row=row_num, column=2, value=product_name)
+            # 3. Magasin
+            ws.cell(row=row_num, column=3, value=store_name)
+            # 4. Stock théorique (le stock calculé/actuel)
+            ws.cell(row=row_num, column=4, value=quantity)
+            # 5. Stock physique (vide - pour saisie manuelle)
+            ws.cell(row=row_num, column=5, value='')
+            # 6. Écart (vide - pour saisie manuelle)
+            ws.cell(row=row_num, column=6, value='')
         
         # Auto adjust columns
         for col_num in range(1, len(columns) + 1):
@@ -223,147 +483,19 @@ class StockViewSet(viewsets.ReadOnlyModelViewSet):
         
         # Generate response
         response = HttpResponse(content_type='application/vnd.ms-excel')
-        filename = f"inventaire_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        date_suffix = f"_au_{date_to.replace('-', '')}" if date_to else ""
+        filename = f"inventaire{date_suffix}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
         
         return response
-    
-    @action(detail=False, methods=['get'])
-    def export_pdf(self, request):
-        """Export stock levels to PDF with filtering."""
-        # Use filter_queryset to apply all configured filters
-        stocks = self.filter_queryset(self.get_queryset())
-        
-        # Limit to 100 records for PDF
-        stocks_list = list(stocks[:100])
-        
-        # Import necessary libraries
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib import colors
-        from reportlab.lib.units import inch
-        from django.utils import timezone
-        import io
-        
-        # Create PDF buffer
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=landscape(A4),
-            rightMargin=30,
-            leftMargin=30,
-            topMargin=50,
-            bottomMargin=30
-        )
-        
-        elements = []
-        styles = getSampleStyleSheet()
-        
-        # Title style
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=20,
-            textColor=colors.HexColor('#366092'),
-            spaceAfter=20,
-            alignment=1  # Center alignment
-        )
-        
-        title = Paragraph("État des Stocks - Inventaire", title_style)
-        elements.append(title)
-        
-        # Generation info
-        date_style = ParagraphStyle(
-            'DateStyle',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=colors.grey,
-            alignment=1
-        )
-        date_text = Paragraph(
-            f"Généré le {timezone.now().strftime('%d/%m/%Y à %H:%M')}", 
-            date_style
-        )
-        elements.append(date_text)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Table data
-        data = [['Produit', 'Référence', 'Magasin', 'Statut', 'Stock total']]
-        
-        low_stock_count = 0
-        out_of_stock_count = 0
-        total_quantity = 0
-        
-        for stock in stocks_list:
-            # Determine status
-            if stock.quantity == 0:
-                status = "Rupture"
-                out_of_stock_count += 1
-            elif stock.quantity < stock.product.minimum_stock:
-                status = "Faible"
-                low_stock_count += 1
-            else:
-                status = "Normal"
-            
-            total_quantity += float(stock.quantity)
-            
-            row = [
-                stock.product.name[:25],
-                stock.product.reference[:15] if stock.product.reference else '-',
-                stock.store.name[:15],
-                status,
-                str(stock.quantity)
-            ]
-            data.append(row)
-        
-        # Create table
-        table = Table(data, repeatRows=1)
-        table.setStyle(TableStyle([
-            # Header style
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            
-            # Body style
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-            ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        elements.append(table)
-        
-        # Statistics
-        elements.append(Spacer(1, 0.3*inch))
-        stats_text = f"<b>Total articles:</b> {len(stocks_list)} | <b>Quantité totale:</b> {total_quantity:.0f} | <b>Stock faible:</b> {low_stock_count} | <b>Rupture:</b> {out_of_stock_count}"
-        stats = Paragraph(stats_text, date_style)
-        elements.append(stats)
-        
-        # Build PDF
-        doc.build(elements)
-        buffer.seek(0)
-        
-        # Generate response
-        response = HttpResponse(buffer.read(), content_type='application/pdf')
-        filename = f'inventaire_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf'
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        
-        return response
-
 
 
 class StockMovementFilterSet(django_filters.FilterSet):
     """Custom FilterSet for StockMovement with date range filters."""
-    date_from = django_filters.DateFilter(field_name='created_at', lookup_expr='date__gte')
-    date_to = django_filters.DateFilter(field_name='created_at', lookup_expr='date__lte')
+    date_from = django_filters.DateFilter(field_name='date', lookup_expr='gte')
+    date_to = django_filters.DateFilter(field_name='date', lookup_expr='lte')
+    movement_type = django_filters.BaseInFilter(field_name='movement_type', lookup_expr='in')
     
     class Meta:
         model = StockMovement
@@ -387,9 +519,46 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = StockMovementFilterSet
     search_fields = ['product__name', 'reference', 'supplier__name', 'supplier__supplier_code']
-    ordering_fields = ['created_at']
-    ordering = ['-created_at']
+    ordering_fields = ['date', 'created_at']
+    ordering = ['date', 'created_at']  # Tri par date de réalisation (du plus ancien au plus récent)
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+
+    def get_queryset(self):
+        """
+        Override pour gérer les mouvements visibles dans les deux magasins (source et destination).
+        Pour les transferts, un mouvement doit être visible si l'utilisateur a accès
+        soit au magasin source, soit au magasin destination.
+        """
+        queryset = super().get_queryset()
+        user = self.request.user
+        
+        # Super admin voit tout
+        if user.is_superuser:
+            return queryset
+        
+        # Vérifier si l'utilisateur a un rôle
+        if not hasattr(user, 'role') or not user.role:
+            return queryset.none()
+        
+        # Si le rôle a accès à tous les stores
+        if user.role.access_scope == 'all':
+            return queryset
+        
+        # Si le rôle a accès uniquement aux stores assignés
+        if user.role.access_scope == 'assigned':
+            # Pour les mouvements, on doit voir ceux où le store OU le destination_store
+            # est dans les stores assignés (pour inclure les transferts entrants et sortants)
+            from django.db.models import Q
+            return queryset.filter(
+                Q(store__in=user.assigned_stores.all()) | 
+                Q(destination_store__in=user.assigned_stores.all())
+            )
+        
+        # Si le rôle a accès uniquement à ses propres données
+        if user.role.access_scope == 'own':
+            return queryset.filter(created_by=user)
+        
+        return queryset
 
     @extend_schema(summary="Obtenir le prochain numéro de pièce", tags=["Inventory"])
     @action(detail=False, methods=['get'], url_path='next-receipt-number', permission_classes=[IsAuthenticated])
@@ -414,117 +583,173 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
 
     
     def perform_create(self, serializer):
+        """Create a stock movement and update stock."""
         movement = serializer.save(created_by=self.request.user)
         self._update_stock(movement)
     
     def perform_update(self, serializer):
         """Override to handle stock updates when modifying a movement."""
-        old_instance = self.get_object()
+        from django.db import transaction
         
-        # Inverser l'ancien mouvement
-        self._reverse_stock(old_instance)
-        
-        # Sauvegarder les modifications
-        updated_instance = serializer.save(updated_by=self.request.user)
-        
-        # Appliquer le nouveau mouvement
-        self._update_stock(updated_instance)
+        # Utiliser une transaction atomique pour garantir la cohérence
+        with transaction.atomic():
+            old_instance = self.get_object()
+            
+            # Inverser l'ancien mouvement
+            self._reverse_stock(old_instance)
+            
+            # Sauvegarder les modifications
+            updated_instance = serializer.save(updated_by=self.request.user)
+            
+            # Appliquer le nouveau mouvement
+            self._update_stock(updated_instance)
     
     def perform_destroy(self, instance):
         """Override to reverse stock changes and soft delete."""
-        # Inverser les changements de stock avant la désactivation
-        self._reverse_stock(instance)
-        # Soft delete: désactiver au lieu de supprimer
-        instance.is_active = False
-        instance.updated_by = self.request.user
-        instance.save()
+        from django.db import transaction
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DELETE] Tentative de suppression du mouvement {instance.id} - {instance.movement_type} - "
+                   f"{instance.product.name} - Quantité: {instance.quantity}")
+        
+        # Utiliser une transaction atomique pour garantir la cohérence
+        try:
+            with transaction.atomic():
+                # Inverser les changements de stock avant la désactivation
+                self._reverse_stock(instance)
+                
+                # Soft delete: désactiver au lieu de supprimer
+                instance.is_active = False
+                instance.updated_by = self.request.user
+                instance.save()
+                
+                logger.info(f"[DELETE] ✓ Mouvement {instance.id} supprimé avec succès et stock inversé")
+        except ValidationError as e:
+            logger.error(f"[DELETE] ✗ Erreur lors de la suppression du mouvement {instance.id}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[DELETE] ✗ Erreur inattendue lors de la suppression du mouvement {instance.id}: {e}")
+            raise ValidationError(f"Erreur lors de la suppression: {str(e)}")
     
     def _reverse_stock(self, movement):
         """Reverse stock changes when deleting a movement."""
-        try:
-            stock = Stock.objects.get(
-                product=movement.product,
-                store=movement.store
-            )
+        from django.db import transaction
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        # Utiliser select_for_update pour éviter les problèmes de concurrence
+        with transaction.atomic():
+            try:
+                # Verrouiller la ligne pour éviter les conditions de course
+                stock = Stock.objects.select_for_update().get(
+                    product=movement.product,
+                    store=movement.store
+                )
+                
+                logger.info(f"[REVERSE] Stock avant annulation: {stock.quantity} pour {movement.product.name}")
+                
+            except Stock.DoesNotExist:
+                # Si le stock n'existe pas, on ne peut pas inverser
+                logger.error(f"[REVERSE] Stock introuvable pour {movement.product.name} dans {movement.store.name}")
+                raise ValidationError(
+                    f"Impossible de supprimer ce mouvement. Le stock pour {movement.product.name} "
+                    f"dans {movement.store.name} n'existe plus."
+                )
             
             if movement.movement_type == 'in':
                 # Inverser une entrée: soustraire la quantité
                 if stock.quantity < movement.quantity:
+                    logger.error(f"[REVERSE] Stock insuffisant ({stock.quantity}) pour annuler l'entrée ({movement.quantity})")
                     raise ValidationError(
-                        f"Impossible de supprimer cette entrée. Le stock actuel ({stock.quantity}) "
-                        f"est inférieur à la quantité de l'entrée ({movement.quantity}). "
-                        "Des sorties ont probablement été effectuées depuis cette entrée."
+                        f"Impossible de supprimer cette entrée. Le stock actuel de {movement.product.name} "
+                        f"({stock.quantity}) est inférieur à la quantité de l'entrée ({movement.quantity}). "
+                        "Des sorties ont probablement été effectuées depuis cette entrée. "
+                        "Veuillez d'abord annuler ces sorties."
                     )
                 stock.quantity -= movement.quantity
-                stock.save()
+                logger.info(f"[REVERSE] Entrée annulée: {stock.quantity + movement.quantity} → {stock.quantity}")
+                stock.save(update_fields=['quantity', 'updated_at'])
+                
             elif movement.movement_type == 'out':
                 # Inverser une sortie: ajouter la quantité
                 stock.quantity += movement.quantity
-                stock.save()
+                logger.info(f"[REVERSE] Sortie annulée: {stock.quantity - movement.quantity} → {stock.quantity}")
+                stock.save(update_fields=['quantity', 'updated_at'])
+                
             elif movement.movement_type == 'transfer':
                 # Inverser un transfert: rajouter au stock source et retirer de la destination
                 stock.quantity += movement.quantity
-                stock.save()
+                logger.info(f"[REVERSE] Transfert annulé (source): {stock.quantity - movement.quantity} → {stock.quantity}")
+                stock.save(update_fields=['quantity', 'updated_at'])
                 
                 if movement.destination_store:
                     try:
-                        dest_stock = Stock.objects.get(
+                        dest_stock = Stock.objects.select_for_update().get(
                             product=movement.product,
                             store=movement.destination_store
                         )
                         if dest_stock.quantity < movement.quantity:
+                            logger.error(f"[REVERSE] Stock destination insuffisant ({dest_stock.quantity}) pour annuler le transfert ({movement.quantity})")
                             raise ValidationError(
-                                f"Impossible de supprimer ce transfert. Le stock destination ({dest_stock.quantity}) "
-                                f"est inférieur à la quantité transférée ({movement.quantity})."
+                                f"Impossible de supprimer ce transfert. Le stock de {movement.product.name} "
+                                f"au magasin destination ({dest_stock.quantity}) est inférieur à la quantité "
+                                f"transférée ({movement.quantity})."
                             )
                         dest_stock.quantity -= movement.quantity
-                        dest_stock.save()
+                        logger.info(f"[REVERSE] Transfert annulé (destination): {dest_stock.quantity + movement.quantity} → {dest_stock.quantity}")
+                        dest_stock.save(update_fields=['quantity', 'updated_at'])
                     except Stock.DoesNotExist:
+                        # Si le stock destination n'existe pas, c'est ok pour la suppression
+                        logger.warning(f"[REVERSE] Stock destination introuvable, annulation partielle du transfert")
                         pass
-        except Stock.DoesNotExist:
-            # Si le stock n'existe pas, on ne peut pas inverser
-            raise ValidationError(
-                "Impossible de supprimer ce mouvement. Le stock associé n'existe plus."
-            )
      
     def _update_stock(self, movement):
         """Update stock based on movement type."""
-        stock, _ = Stock.objects.get_or_create(
-            product=movement.product,
-            store=movement.store,
-            defaults={'quantity': 0, 'reserved_quantity': 0}
-        )
+        from django.db import transaction
         
-        if movement.movement_type == 'in':
-            stock.quantity += movement.quantity
-        elif movement.movement_type == 'out':
-            # Vérification supplémentaire (normalement déjà validé par le serializer)
-            if stock.quantity < movement.quantity:
-                raise ValidationError(
-                    f"Stock insuffisant pour {movement.product.name} dans {movement.store.name}. "
-                    f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
-                )
-            stock.quantity -= movement.quantity
-        elif movement.movement_type == 'transfer':
-            # Pour les transferts, diminuer le stock source
-            if stock.quantity < movement.quantity:
-                raise ValidationError(
-                    f"Stock insuffisant pour transférer {movement.product.name}. "
-                    f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
-                )
-            stock.quantity -= movement.quantity
+        # Utiliser une transaction atomique pour garantir la cohérence
+        with transaction.atomic():
+            # Utiliser select_for_update pour éviter les conditions de course
+            stock, created = Stock.objects.select_for_update().get_or_create(
+                product=movement.product,
+                store=movement.store,
+                defaults={'quantity': 0, 'reserved_quantity': 0}
+            )
             
-            # Augmenter le stock destination si spécifié
-            if movement.destination_store:
-                dest_stock, _ = Stock.objects.get_or_create(
-                    product=movement.product,
-                    store=movement.destination_store,
-                    defaults={'quantity': 0, 'reserved_quantity': 0}
-                )
-                dest_stock.quantity += movement.quantity
-                dest_stock.save()
-        
-        stock.save()
+            if movement.movement_type == 'in':
+                stock.quantity += movement.quantity
+                
+            elif movement.movement_type == 'out':
+                # Vérification supplémentaire (normalement déjà validé par le serializer)
+                if stock.quantity < movement.quantity:
+                    raise ValidationError(
+                        f"Stock insuffisant pour {movement.product.name} dans {movement.store.name}. "
+                        f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
+                    )
+                stock.quantity -= movement.quantity
+                
+            elif movement.movement_type == 'transfer':
+                # Pour les transferts, diminuer le stock source
+                if stock.quantity < movement.quantity:
+                    raise ValidationError(
+                        f"Stock insuffisant pour transférer {movement.product.name}. "
+                        f"Disponible: {stock.quantity}, Demandé: {movement.quantity}"
+                    )
+                stock.quantity -= movement.quantity
+                
+                # Augmenter le stock destination si spécifié
+                if movement.destination_store:
+                    dest_stock, _ = Stock.objects.select_for_update().get_or_create(
+                        product=movement.product,
+                        store=movement.destination_store,
+                        defaults={'quantity': 0, 'reserved_quantity': 0}
+                    )
+                    dest_stock.quantity += movement.quantity
+                    dest_stock.save(update_fields=['quantity', 'updated_at'])
+            
+            stock.save(update_fields=['quantity', 'updated_at'])
 
     @extend_schema(summary="Exporter les mouvements en Excel", tags=["Inventory"])
     @action(detail=False, methods=['get'])
@@ -603,175 +828,168 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         wb.save(response)
         
         return response
-    
-    @extend_schema(summary="Exporter les mouvements en PDF", tags=["Inventory"])
-    @action(detail=False, methods=['get'])
-    def export_pdf(self, request):
-        """Export stock movements to PDF with filtering.
-        Supports all filters from the list endpoint:
-        - movement_type: 'in', 'out', 'transfer'
-        - date_from: YYYY-MM-DD (applies to created_at)
-        - date_to: YYYY-MM-DD (applies to created_at)
-        - supplier: supplier id
-        - product: product id
-        - store: store id
-        - search: search in product name, reference, supplier name, supplier code
-        """
-        # Use filter_queryset to apply all configured filters
-        movements = self.filter_queryset(self.get_queryset())
-        
-        # Get filter parameters
-        movement_type = request.query_params.get('movement_type', '')
-        date_from = request.query_params.get('date_from', '')
-        date_to = request.query_params.get('date_to', '')
-        
-        # Apply date filters if provided
-        if date_from:
-            try:
-                from datetime import datetime
-                date_from_obj = datetime.strptime(date_from, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__gte=date_from_obj)
-            except ValueError:
-                pass
-        
-        if date_to:
-            try:
-                from datetime import datetime
-                date_to_obj = datetime.strptime(date_to, '%Y-%m-%d').date()
-                movements = movements.filter(created_at__date__lte=date_to_obj)
-            except ValueError:
-                pass
-        
-        # Import necessary libraries
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib import colors
-        from reportlab.lib.units import inch
-        from datetime import datetime
-        from django.utils import timezone
-        import io
-        
-        # Sort movements by date (oldest first) for progressive stock calculation
-        # Then limit to 100 records for PDF
-        movements_list = list(movements.order_by('created_at')[:100])
-        
-        # Create PDF buffer
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=landscape(A4),
-            rightMargin=30,
-            leftMargin=30,
-            topMargin=50,
-            bottomMargin=30
-        )
-        
-        elements = []
-        styles = getSampleStyleSheet()
-        
-        # Title style
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=20,
-            textColor=colors.HexColor('#366092'),
-            spaceAfter=20,
-            alignment=1  # Center alignment
-        )
-        
-        # Generate title with type filter if present
-        type_label = f" - {movement_type.upper()}" if movement_type else ""
-        title = Paragraph(f"Mouvements de Stock{type_label}", title_style)
-        elements.append(title)
-        
-        # Date range and generation info
-        date_range = f"Du {date_from} au {date_to}" if date_from and date_to else "Tous les mouvements"
-        date_style = ParagraphStyle(
-            'DateStyle',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=colors.grey,
-            alignment=1
-        )
-        date_text = Paragraph(
-            f"{date_range} - Généré le {timezone.now().strftime('%d/%m/%Y à %H:%M')}", 
-            date_style
-        )
-        elements.append(date_text)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Table data
-        data = [['Date', 'Désignation', 'Entrées', 'Sorties', 'Stocks final']]
-        
-        # Calculate progressive stock
-        stock_cumulatif = 0
-        
-        for movement in movements_list:
-            entrees = ''
-            sorties = ''
-            
-            if movement.movement_type == 'in':
-                entrees = str(movement.quantity)
-                stock_cumulatif += float(movement.quantity)
-            elif movement.movement_type == 'out':
-                sorties = str(movement.quantity)
-                stock_cumulatif -= float(movement.quantity)
-            
-            row = [
-                movement.created_at.strftime('%d/%m/%Y'),
-                movement.product.name[:40],
-                entrees,
-                sorties,
-                f"{stock_cumulatif:.0f}"
-            ]
-            data.append(row)
-        
-        # Create table
-        table = Table(data, repeatRows=1)
-        table.setStyle(TableStyle([
-            # Header style
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            
-            # Body style
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-            ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        elements.append(table)
-        
-        # Statistics
-        elements.append(Spacer(1, 0.3*inch))
-        total_entrees = sum(m.quantity for m in movements_list if m.movement_type == 'in')
-        total_sorties = sum(m.quantity for m in movements_list if m.movement_type == 'out')
-        stock_final = total_entrees - total_sorties
-        
-        stats_text = f"<b>Total mouvements:</b> {len(movements_list)} | <b>Total Entrées:</b> {total_entrees:.0f} | <b>Total Sorties:</b> {total_sorties:.0f} | <b>Stock final:</b> {stock_final:.0f}"
-        stats = Paragraph(stats_text, date_style)
-        elements.append(stats)
-        
-        # Build PDF
-        doc.build(elements)
-        buffer.seek(0)
-        
-        # Generate response
-        response = HttpResponse(buffer.read(), content_type='application/pdf')
-        filename = f'mouvements_stock_{timezone.now().strftime("%Y%m%d_%H%M%S")}.pdf'
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        
-        return response
 
+    @extend_schema(summary="Diagnostic de cohérence des stocks", tags=["Inventory"])
+    @action(detail=False, methods=['get'], url_path='stock-diagnostic')
+    def stock_diagnostic(self, request):
+        """Vérifie la cohérence des stocks et identifie les incohérences."""
+        from django.db.models import Sum
+        from decimal import Decimal
+        
+        # 1. Statistiques des mouvements
+        total_movements = StockMovement.objects.count()
+        active_movements = StockMovement.objects.filter(is_active=True).count()
+        inactive_movements = StockMovement.objects.filter(is_active=False).count()
+        
+        stats = {
+            'totalMovements': total_movements,
+            'activeMovements': active_movements,
+            'inactiveMovements': inactive_movements,
+        }
+        
+        # 2. Vérifier chaque produit/magasin
+        stocks = Stock.objects.select_related('product', 'store').all()
+        issues = []
+        
+        for stock in stocks:
+            # Calculer le stock théorique basé sur les mouvements ACTIFS uniquement
+            movements = StockMovement.objects.filter(
+                product=stock.product,
+                store=stock.store,
+                is_active=True
+            )
+            
+            entrees = movements.filter(movement_type='in').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            sorties = movements.filter(movement_type='out').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Transferts sortants
+            transferts_out = movements.filter(movement_type='transfer').aggregate(
+                total=Sum('quantity')
+            )['total'] or Decimal('0')
+            
+            # Transferts entrants
+            transferts_in = StockMovement.objects.filter(
+                product=stock.product,
+                destination_store=stock.store,
+                movement_type='transfer',
+                is_active=True
+            ).aggregate(total=Sum('quantity'))['total'] or Decimal('0')
+            
+            stock_theorique = entrees - sorties - transferts_out + transferts_in
+            stock_actuel = stock.quantity
+            
+            difference = stock_actuel - stock_theorique
+            
+            if abs(difference) > Decimal('0.01'):  # Tolérance pour les arrondis
+                issues.append({
+                    'product': stock.product.name,
+                    'product_id': stock.product.id,
+                    'store': stock.store.name,
+                    'store_id': stock.store.id,
+                    'stock_actuel': float(stock_actuel),
+                    'stock_theorique': float(stock_theorique),
+                    'difference': float(difference),
+                    'entrees': float(entrees),
+                    'sorties': float(sorties),
+                    'transferts_out': float(transferts_out),
+                    'transferts_in': float(transferts_in),
+                })
+        
+        # 3. Bons d'entrée supprimés
+        deleted_receipts = []
+        inactive_receipts = StockMovement.objects.filter(
+            is_active=False,
+            receipt_number__isnull=False
+        ).values('receipt_number').distinct()
+        
+        for receipt in inactive_receipts:
+            receipt_num = receipt['receipt_number']
+            movements = StockMovement.objects.filter(
+                receipt_number=receipt_num,
+                is_active=False
+            )
+            total_qty = movements.aggregate(total=Sum('quantity'))['total'] or 0
+            deleted_receipts.append({
+                'receipt_number': receipt_num,
+                'count': movements.count(),
+                'total_qty': float(total_qty)
+            })
+        
+        return Response({
+            'stats': stats,
+            'issues': issues,
+            'deleted_receipts': deleted_receipts,
+        })
     
+    @extend_schema(summary="Corriger les incohérences de stocks", tags=["Inventory"])
+    @action(detail=False, methods=['post'], url_path='stock-diagnostic/fix')
+    def fix_stock_diagnostic(self, request):
+        """Corrige les incohérences de stocks détectées."""
+        from django.db.models import Sum
+        from decimal import Decimal
+        from django.db import transaction
+        
+        corrected = 0
+        errors = []
+        
+        # Récupérer toutes les incohérences
+        stocks = Stock.objects.select_related('product', 'store').all()
+        
+        with transaction.atomic():
+            for stock in stocks:
+                # Calculer le stock théorique
+                movements = StockMovement.objects.filter(
+                    product=stock.product,
+                    store=stock.store,
+                    is_active=True
+                )
+                
+                entrees = movements.filter(movement_type='in').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                sorties = movements.filter(movement_type='out').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                transferts_out = movements.filter(movement_type='transfer').aggregate(
+                    total=Sum('quantity')
+                )['total'] or Decimal('0')
+                
+                transferts_in = StockMovement.objects.filter(
+                    product=stock.product,
+                    destination_store=stock.store,
+                    movement_type='transfer',
+                    is_active=True
+                ).aggregate(total=Sum('quantity'))['total'] or Decimal('0')
+                
+                stock_theorique = entrees - sorties - transferts_out + transferts_in
+                stock_actuel = stock.quantity
+                
+                difference = stock_actuel - stock_theorique
+                
+                if abs(difference) > Decimal('0.01'):
+                    try:
+                        stock.quantity = stock_theorique
+                        stock.save()
+                        corrected += 1
+                    except Exception as e:
+                        errors.append({
+                            'product': stock.product.name,
+                            'store': stock.store.name,
+                            'error': str(e)
+                        })
+        
+        return Response({
+            'corrected': corrected,
+            'errors': errors,
+            'message': f'{corrected} stock(s) corrigé(s) avec succès'
+        })
 
 
 @extend_schema_view(
@@ -791,7 +1009,7 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     filterset_fields = ['source_store', 'destination_store', 'status']
     search_fields = ['transfer_number', 'source_store__name', 'destination_store__name', 'lines__product__name']
     ordering_fields = ['transfer_date', 'created_at']
-    ordering = ['-created_at']
+    ordering = ['created_at']
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -891,10 +1109,51 @@ class StockTransferViewSet(viewsets.ModelViewSet):
             )
             stock.quantity -= line.quantity_sent
             stock.save()
+            
+            # Créer un mouvement de stock de type "transfer" pour tracer la sortie
+            StockMovement.objects.create(
+                product=line.product,
+                store=transfer.source_store,
+                destination_store=transfer.destination_store,
+                movement_type='transfer',
+                quantity=line.quantity_sent,
+                reference=transfer.transfer_number,
+                notes=f'Transfert vers {transfer.destination_store.name}',
+                date=transfer.transfer_date,
+                created_by=request.user
+            )
         
         transfer.status = 'in_transit'
         transfer.validated_by = request.user
         transfer.save()
+        
+        # Notifier les utilisateurs du magasin destination qu'un transfert est en route
+        from core.notifications import create_notification
+        from apps.accounts.models import User
+        
+        users_to_notify = User.objects.filter(
+            is_active=True,
+            role__isnull=False,
+            assigned_stores=transfer.destination_store
+        ).distinct()
+        
+        total_items = sum(line.quantity_sent for line in transfer.lines.all())
+        
+        for user in users_to_notify:
+            create_notification(
+                user=user,
+                notification_type='transfer_in_transit',
+                title='🚚 Transfert en route',
+                message=f'Transfert {transfer.transfer_number} en transit : {int(total_items)} article(s) en provenance de "{transfer.source_store.name}" arrivent bientôt.',
+                priority='medium',
+                data={
+                    'transfer_id': transfer.id,
+                    'transfer_number': transfer.transfer_number,
+                    'from_warehouse': transfer.source_store.name,
+                    'total_items': int(total_items)
+                },
+                action_url=f'/inventory/transfers/{transfer.id}'
+            )
         
         serializer = self.get_serializer(transfer)
         return Response(serializer.data)
@@ -918,24 +1177,73 @@ class StockTransferViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Update quantities received
-        for line in transfer.lines.all():
-            line.quantity_received = line.quantity_sent
-            line.save()
+        # Utiliser une transaction atomique pour éviter les problèmes
+        with transaction.atomic():
+            # Update quantities received
+            for line in transfer.lines.all():
+                line.quantity_received = line.quantity_sent
+                line.save()
+                
+                # Increase stock in destination
+                # Utiliser select_for_update pour éviter les conditions de course
+                try:
+                    stock = Stock.objects.select_for_update().get(
+                        product=line.product,
+                        store=transfer.destination_store
+                    )
+                    stock.quantity += line.quantity_received
+                    stock.save()
+                except Stock.DoesNotExist:
+                    # Si le stock n'existe pas, créer directement avec la bonne quantité
+                    # pour éviter le double save (0 puis +quantity) qui déclenche l'alerte
+                    Stock.objects.create(
+                        product=line.product,
+                        store=transfer.destination_store,
+                        quantity=line.quantity_received,
+                        reserved_quantity=0
+                    )
+                
+                # Créer un mouvement de stock de type "in" pour tracer l'entrée au magasin destination
+                StockMovement.objects.create(
+                    product=line.product,
+                    store=transfer.destination_store,
+                    movement_type='in',
+                    quantity=line.quantity_received,
+                    reference=transfer.transfer_number,
+                    notes=f'Transfert reçu depuis {transfer.source_store.name}',
+                    date=transfer.actual_arrival or timezone.now().date(),
+                    created_by=request.user
+                )
             
-            # Increase stock in destination
-            stock, _ = Stock.objects.get_or_create(
-                product=line.product,
-                store=transfer.destination_store,
-                defaults={'quantity': 0, 'reserved_quantity': 0}
-            )
-            stock.quantity += line.quantity_received
-            stock.save()
+            transfer.status = 'received'
+            transfer.received_by = request.user
+            transfer.actual_arrival = timezone.now().date()
+            transfer.save()
         
-        transfer.status = 'received'
-        transfer.received_by = request.user
-        transfer.actual_arrival = timezone.now().date()
-        transfer.save()
+        # Notifier les utilisateurs du magasin destination
+        from core.notifications import notify_transfer_received
+        from apps.accounts.models import User
+        
+        # Obtenir les utilisateurs à notifier pour le magasin destination
+        users_to_notify = User.objects.filter(
+            is_active=True,
+            role__isnull=False,
+            assigned_stores=transfer.destination_store
+        ).distinct()
+        
+        # Calculer le nombre total d'articles transférés
+        total_items = sum(line.quantity_received for line in transfer.lines.all())
+        
+        # Envoyer la notification à chaque utilisateur
+        for user in users_to_notify:
+            notify_transfer_received(
+                user=user,
+                transfer_id=transfer.id,
+                transfer_number=transfer.transfer_number,
+                from_warehouse=transfer.source_store.name,
+                to_warehouse=transfer.destination_store.name,
+                total_items=int(total_items)
+            )
         
         serializer = self.get_serializer(transfer)
         return Response(serializer.data)
@@ -1043,7 +1351,7 @@ class InventoryViewSet(viewsets.ModelViewSet):
     filterset_fields = ['store', 'status']
     search_fields = ['inventory_number']
     ordering_fields = ['inventory_date', 'created_at']
-    ordering = ['-created_at']
+    ordering = ['created_at']
     
     def get_queryset(self):
         queryset = super().get_queryset()

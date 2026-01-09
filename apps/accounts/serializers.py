@@ -147,7 +147,7 @@ class UserListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
             'display_name', 'phone', 'avatar', 'role_name',
-            'is_active', 'date_joined'
+            'is_active', 'is_staff', 'is_superuser', 'last_login', 'date_joined'
         ]
 
 
@@ -171,7 +171,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
             
             # Employee
             'employee_id', 'role', 'role_name',
-            'secondary_roles', 'secondary_roles_list', 'assigned_stores',
+            'secondary_roles', 'secondary_roles_list',  # 'assigned_stores' commenté temporairement
             'assigned_stores_list', 'default_store', 'has_assigned_stores', 
             'is_store_restricted', 'hire_date', 'termination_date',
             
@@ -185,8 +185,10 @@ class UserDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['date_joined', 'last_login', 'created_at', 'updated_at']
     
     def get_assigned_stores_list(self, obj):
-        from apps.inventory.serializers import StoreMinimalSerializer
-        return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
+        # TEMPORAIRE: assigned_stores commenté
+        return []
+        # from apps.inventory.serializers import StoreMinimalSerializer
+        # return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
     
     def get_default_store(self, obj):
         """Return default store ID for store-restricted users."""
@@ -220,7 +222,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             
             # Employee
             'employee_id', 'role', 'secondary_roles',
-            'assigned_stores', 'hire_date',
+            # 'assigned_stores',  # COMMENTÉ temporairement
+            'hire_date',
             
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
@@ -249,7 +252,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         validated_data.pop('password_confirm')
         password = validated_data.pop('password')
         secondary_roles = validated_data.pop('secondary_roles', [])
-        assigned_stores = validated_data.pop('assigned_stores', [])
+        # assigned_stores = validated_data.pop('assigned_stores', [])  # COMMENTÉ temporairement
         
         user = User.objects.create_user(**validated_data)
         user.set_password(password)
@@ -259,9 +262,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         if secondary_roles:
             user.secondary_roles.set(secondary_roles)
         
-        # Assigner les magasins
-        if assigned_stores:
-            user.assigned_stores.set(assigned_stores)
+        # Assigner les magasins - COMMENTÉ temporairement
+        # if assigned_stores:
+        #     user.assigned_stores.set(assigned_stores)
         
         return user
 

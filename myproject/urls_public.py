@@ -42,6 +42,13 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 
     path('admin/', admin.site.urls),
+    
+    # SuperAdmin Auth (public) - Utilise apps.main pour l'authentification SuperAdmin
+    path('api/v1/auth/', include('apps.main.urls')),
+    
+    # SuperAdmin API (schéma public uniquement)
+    path('api/v1/superadmin/', include('apps.tenants.superadmin_urls')),
+    
     path('api/v1/', include('apps.urls_public')),
 ]
 

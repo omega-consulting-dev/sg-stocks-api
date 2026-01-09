@@ -19,7 +19,6 @@ from core.utils.export_utils import ExcelExporter, PDFExporter
 import pandas as pd
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
-import csv
 from django.http import HttpResponse
 
 from apps.products.models import Product, ProductCategory, ProductImage
@@ -66,13 +65,13 @@ class ProductViewSet(viewsets.ModelViewSet):
     Provides CRUD operations for products.
     """
     
-    queryset = Product.objects.filter(is_active=True).select_related('category').prefetch_related('images')
+    queryset = Product.objects.filter(is_active=True).select_related('category', 'created_by', 'updated_by').prefetch_related('images')
     permission_classes = [IsAuthenticated, HasModulePermission]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProductFilter
     search_fields = ['name', 'reference', 'barcode', 'description']
     ordering_fields = ['name', 'reference', 'selling_price', 'created_at']
-    ordering = ['-created_at']
+    ordering = ['created_at']
     module_name = 'products'
     
     def get_serializer_class(self):
@@ -85,11 +84,56 @@ class ProductViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Filter queryset based on user permissions."""
+        from django.db.models import Sum, Q, F, Case, When, BooleanField, Subquery, OuterRef, DecimalField, Value
+        from django.db.models.functions import Coalesce
+        from apps.inventory.models import Stock
+        
         queryset = super().get_queryset()
         
         # Filter by active status for non-admin users
         if not self.request.user.is_staff:
             queryset = queryset.filter(is_active=True)
+        
+        # Calculer le stock selon le contexte de l'utilisateur
+        user = self.request.user
+        
+        # Si l'utilisateur a des magasins assignés, afficher le stock de son premier magasin
+        user_stores = user.assigned_stores.all()
+        
+        if user_stores.exists():
+            # Récupérer le stock du premier magasin assigné à l'utilisateur
+            user_store = user_stores.first()
+            stock_subquery = Stock.objects.filter(
+                product=OuterRef('pk'),
+                store=user_store
+            ).values('quantity')[:1]
+            
+            queryset = queryset.annotate(
+                current_stock=Coalesce(
+                    Subquery(stock_subquery, output_field=DecimalField()), 
+                    Value(0, output_field=DecimalField()),
+                    output_field=DecimalField()
+                ),
+                is_low_stock=Case(
+                    When(Q(current_stock__lte=F('minimum_stock')) & Q(minimum_stock__gt=0), then=True),
+                    default=False,
+                    output_field=BooleanField()
+                )
+            )
+        else:
+            # Pour les admins sans magasin assigné, calculer le stock total
+            queryset = queryset.annotate(
+                current_stock=Coalesce(
+                    Sum('stocks__quantity'), 
+                    Value(0, output_field=DecimalField()),
+                    output_field=DecimalField()
+                ),
+                is_low_stock=Case(
+                    When(Q(current_stock__lte=F('minimum_stock')) & Q(minimum_stock__gt=0), then=True),
+                    default=False,
+                    output_field=BooleanField()
+                )
+            )
         
         return queryset
     
@@ -157,42 +201,11 @@ class ProductViewSet(viewsets.ModelViewSet):
     
     @extend_schema(
         summary="Exporter les produits",
-        description="Exporte la liste des produits au format CSV.",
+        description="Exporte la liste des produits au format Excel (.xlsx).",
         tags=["Produits"]
     )
-    @action(detail=False, methods=['get'])
-    def export_csv(self, request, *args, **kwargs):
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="produits.csv"'
-
-        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        
-        # Headers
-        writer.writerow([
-            'Référence', 'Nom', 'Catégorie', 'Prix d\'achat',
-            'Prix de vente', 'Stock min', 'Stock optimal', 'Actif'
-        ])
-        
-        for product in Product.objects.all():
-            writer.writerow([
-                product.reference.ljust(15),
-                product.name.ljust(30),
-                product.category.name.ljust(20),
-                f"{product.cost_price:,.2f}".rjust(10),
-                f"{product.selling_price:,.2f}".rjust(10),
-                str(product.minimum_stock).rjust(5),
-                str(product.optimal_stock).rjust(5),
-                ('Oui' if product.is_active else 'Non').ljust(5)
-            ])
-    
-        return response
-    
-    @extend_schema(
-        summary="Exporter les produits en Excel",
-        tags=["Products"]
-    )
-    @action(detail=False, methods=['get'])
-    def export_excel(self, request):
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request, *args, **kwargs):
         """Export products to Excel."""
         products = self.filter_queryset(self.get_queryset())
         
@@ -200,8 +213,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         
         # Headers
         columns = [
-            'Référence', 'Nom', 'Catégorie', 'Prix Achat', 'Prix Vente',
-            'TVA (%)', 'Stock Min', 'Stock Optimal', 'Actif'
+            'Référence', 'Nom', 'Catégorie', 'Prix d\'achat',
+            'Prix de vente', 'TVA (%)', 'Stock min', 'Stock optimal', 'Actif'
         ]
         ExcelExporter.style_header(ws, columns)
         
@@ -221,7 +234,6 @@ class ProductViewSet(viewsets.ModelViewSet):
         
         filename = f"produits_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return ExcelExporter.generate_response(wb, filename)
-
 
     @extend_schema(
         summary="Exporter les produits en PDF",
@@ -364,7 +376,10 @@ class ProductViewSet(viewsets.ModelViewSet):
 
 
 class ProductCategoryViewSet(viewsets.ModelViewSet):
-    queryset = ProductCategory.objects.filter(is_active=True)
+    queryset = ProductCategory.objects.filter(is_active=True).select_related('created_by', 'updated_by').only(
+        'id', 'name', 'description', 'is_active', 'created_at', 'updated_at',
+        'created_by__id', 'created_by__username', 'updated_by__id', 'updated_by__username'
+    )
     serializer_class = ProductCategorySerializer
     permission_classes = [IsAuthenticated, HasModulePermission]
     module_name = 'products'

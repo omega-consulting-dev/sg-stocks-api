@@ -82,6 +82,18 @@ class DashboardViewSet(viewsets.ViewSet):
         
         return queryset.filter(created_by=user)
     
+    def _get_assigned_stores(self, user):
+        """Helper to get user's assigned stores."""
+        if user.is_superuser:
+            return None  # Signifie pas de filtrage, voir tous les stores
+        
+        if hasattr(user, 'assigned_stores'):
+            assigned_stores = user.assigned_stores.all()
+            if assigned_stores.exists():
+                return assigned_stores
+        
+        return None
+    
     @action(detail=False, methods=['get'])
     def overview(self, request):
         """Main dashboard overview with user-specific data."""
@@ -90,61 +102,107 @@ class DashboardViewSet(viewsets.ViewSet):
         month_start = today.replace(day=1)
         year_start = today.replace(month=1, day=1)
         
-        # Get filtered querysets
-        sales_qs = self._get_sales_queryset(user)
-        expenses_qs = self._get_expenses_queryset(user)
+        # Get assigned stores if user has any
+        assigned_stores = self._get_assigned_stores(user)
         
-        # Sales statistics
-        sales_today = sales_qs.filter(sale_date=today, status='confirmed').aggregate(
+        # Get filtered querysets with optimizations
+        sales_qs = self._get_sales_queryset(user).only(
+            'id', 'sale_date', 'status', 'total_amount', 'payment_status'
+        )
+        expenses_qs = self._get_expenses_queryset(user).only(
+            'id', 'status'
+        )
+        
+        # Sales statistics - TOUTES LES VENTES (pas seulement confirmées)
+        # Car dans la facturation, on peut avoir des ventes qui génèrent du CA sans être confirmées
+        sales_today = sales_qs.filter(sale_date=today).aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
         
         sales_month = sales_qs.filter(
-            sale_date__gte=month_start,
-            status='confirmed'
+            sale_date__gte=month_start
         ).aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
         
         sales_year = sales_qs.filter(
-            sale_date__gte=year_start,
-            status='confirmed'
+            sale_date__gte=year_start
         ).aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
         
-        # Stock statistics
+        # Stock statistics (optimized queries)
         stock_stats = {
             'total_products': Product.objects.filter(is_active=True).count(),
-            'low_stock': Stock.objects.filter(
+            'low_stock': Stock.objects.select_related('product').filter(
                 quantity__lt=F('product__minimum_stock')
-            ).distinct().count(),
+            ).only('id', 'product_id').distinct().count(),
             'out_of_stock': Stock.objects.filter(quantity=0).count(),
-            'total_stock_value': Stock.objects.aggregate(
+            'total_stock_value': Stock.objects.select_related('product').aggregate(
                 total=Sum(F('quantity') * F('product__cost_price'))
             )['total'] or 0,
         }
         
-        # Customer statistics
-        customer_stats = {
-            'total': User.objects.filter(user_type='customer', is_active=True).count(),
-            'new_this_month': User.objects.filter(
-                user_type='customer',
-                date_joined__gte=month_start
-            ).count(),
-        }
+        # Customer statistics - filtrées par les clients qui ont des ventes dans les stores assignés
+        from apps.customers.models import Customer
         
-        # Cash statistics
-        cash_balance = CashMovement.objects.aggregate(
-            total=Sum(Case(
-                When(movement_type='in', then='amount'),
-                When(movement_type='out', then=-F('amount')),
-                output_field=DecimalField()
-            ))
-        )['total'] or 0
+        # Si l'utilisateur a des stores assignés, compter les clients de ces stores uniquement
+        if assigned_stores:
+            customer_queryset = Customer.objects.filter(
+                sales__store__in=assigned_stores,
+                sales__customer__isnull=False,
+                is_active=True
+            ).distinct()
+            customer_stats = {
+                'total': customer_queryset.count(),
+                'new_this_month': Customer.objects.filter(
+                    sales__store__in=assigned_stores,
+                    sales__customer__isnull=False,
+                    created_at__gte=month_start
+                ).distinct().count(),
+            }
+        else:
+            # Admin voit tous les clients
+            customer_stats = {
+                'total': Customer.objects.filter(is_active=True).count(),
+                'new_this_month': Customer.objects.filter(
+                    created_at__gte=month_start
+                ).count(),
+            }
+        
+        # Cash statistics - ALIGNÉ AVEC /encaissements
+        # Calcul du solde de caisse = Encaissements - Sorties
+        # Encaissements = Ventes payées + Paiements factures
+        # Sorties = Dépenses + Paiements fournisseurs + Remboursements emprunts + Mouvements caisse OUT
+        
+        from apps.invoicing.models import InvoicePayment
+        from apps.suppliers.models import SupplierPayment
+        from apps.loans.models import LoanPayment
+        
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tout
+            invoice_payments = InvoicePayment.objects.aggregate(total=Sum('amount'))['total'] or 0
+            sales_paid = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
+            expenses_total = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
+            supplier_payments = SupplierPayment.objects.aggregate(total=Sum('amount'))['total'] or 0
+            loan_payments = LoanPayment.objects.aggregate(total=Sum('amount'))['total'] or 0
+            cash_out = CashMovement.objects.filter(movement_type='out').aggregate(total=Sum('amount'))['total'] or 0
+        else:
+            # Utilisateur normal voit uniquement ses transactions
+            invoice_payments = InvoicePayment.objects.filter(invoice__created_by=user).aggregate(total=Sum('amount'))['total'] or 0
+            sales_paid = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
+            expenses_total = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
+            supplier_payments = SupplierPayment.objects.filter(created_by=user).aggregate(total=Sum('amount'))['total'] or 0
+            loan_payments = LoanPayment.objects.filter(created_by=user).aggregate(total=Sum('amount'))['total'] or 0
+            cash_out = CashMovement.objects.filter(movement_type='out', created_by=user).aggregate(total=Sum('amount'))['total'] or 0
+        
+        # Calculer le solde de caisse
+        total_encaissements = invoice_payments + sales_paid
+        total_sorties = expenses_total + supplier_payments + loan_payments + cash_out
+        cash_balance = total_encaissements - total_sorties
         
         # Pending items (filtered by user)
         pending = {
@@ -185,22 +243,26 @@ class DashboardViewSet(viewsets.ViewSet):
     def sales_chart(self, request):
         """Sales chart data over time (filtered by user)."""
         user = request.user
-        period = request.query_params.get('period', 'month')  # day, week, month, year
+        period = request.query_params.get('period', 'month')  # week, month, year
         
         today = timezone.now().date()
         
-        if period == 'day':
-            start_date = today - timedelta(days=30)
-            trunc_func = TruncDate
-        elif period == 'week':
-            start_date = today - timedelta(weeks=12)
+        if period == 'week':
+            # Derniers 7 jours (une semaine)
+            start_date = today - timedelta(days=7)
             trunc_func = TruncDate
         elif period == 'month':
+            # Derniers 30 jours (un mois) - affichage jour par jour
+            start_date = today - timedelta(days=30)
+            trunc_func = TruncDate
+        elif period == 'year':
+            # Derniers 12 mois - affichage mois par mois
             start_date = today - timedelta(days=365)
             trunc_func = TruncMonth
         else:
-            start_date = today - timedelta(days=365)
-            trunc_func = TruncMonth
+            # Par défaut: dernier mois
+            start_date = today - timedelta(days=30)
+            trunc_func = TruncDate
         
         # Get filtered sales queryset
         sales_qs = self._get_sales_queryset(user)
@@ -219,15 +281,17 @@ class DashboardViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['get'])
     def top_products(self, request):
-        """Top selling products (filtered by user)."""
+        """Top selling products (filtered by user) with real stock information."""
         user = request.user
         limit = int(request.query_params.get('limit', 10))
         
         from apps.sales.models import SaleLine
+        from apps.inventory.models import Stock
         
         # Get filtered sales queryset
         sales_qs = self._get_sales_queryset(user)
         
+        # Get top selling products
         top_products = SaleLine.objects.filter(
             sale__in=sales_qs,
             sale__status='confirmed',
@@ -240,9 +304,41 @@ class DashboardViewSet(viewsets.ViewSet):
             total_quantity=Sum('quantity'),
             total_amount=Sum(F('quantity') * F('unit_price')),
             sales_count=Count('sale', distinct=True)
-        ).order_by('-total_amount')[:limit]
+        ).order_by('total_amount')[:limit]
         
-        return Response(list(top_products))
+        # Enrich with real stock data
+        result = []
+        for product_data in top_products:
+            product_id = product_data['product__id']
+            
+            # Get stock for this product based on user's access
+            if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+                # Admin sees total stock across all stores
+                total_stock = Stock.objects.filter(
+                    product_id=product_id
+                ).aggregate(total=Sum('quantity'))['total'] or 0
+            else:
+                # Users with assigned stores see stock in their stores
+                assigned_stores = user.assigned_stores.all() if hasattr(user, 'assigned_stores') else []
+                if assigned_stores.exists():
+                    total_stock = Stock.objects.filter(
+                        product_id=product_id,
+                        store__in=assigned_stores
+                    ).aggregate(total=Sum('quantity'))['total'] or 0
+                else:
+                    total_stock = 0
+            
+            result.append({
+                'product__id': product_data['product__id'],
+                'product__name': product_data['product__name'],
+                'product__reference': product_data['product__reference'],
+                'total_quantity': product_data['total_quantity'],
+                'total_amount': float(product_data['total_amount']),
+                'sales_count': product_data['sales_count'],
+                'current_stock': total_stock  # Stock réel
+            })
+        
+        return Response(result)
     
     @action(detail=False, methods=['get'])
     def top_customers(self, request):
@@ -254,18 +350,26 @@ class DashboardViewSet(viewsets.ViewSet):
         sales_qs = self._get_sales_queryset(user)
         
         top_customers = sales_qs.filter(
-            status='confirmed'
+            status='confirmed',
+            customer__isnull=False  # Exclure les ventes sans client
         ).values(
             'customer__id',
-            'customer__username',
-            customer_name=F('customer__first_name')
+            'customer__name',
+            'customer__customer_code'
         ).annotate(
             total_amount=Sum('total_amount'),
-            sales_count=Count('id'),
-            avg_order=Avg('total_amount')
-        ).order_by('-total_amount')[:limit]
+            sales_count=Count('id')
+        ).order_by('total_amount')[:limit]
         
-        return Response(list(top_customers))
+        # Calculate average order value manually after aggregation
+        result = []
+        for customer in top_customers:
+            customer_data = dict(customer)
+            customer_data['avg_order'] = float(customer['total_amount'] / customer['sales_count']) if customer['sales_count'] > 0 else 0
+            customer_data['total_amount'] = float(customer['total_amount'])
+            result.append(customer_data)
+        
+        return Response(result)
     
     @action(detail=False, methods=['get'])
     def revenue_by_category(self, request):
@@ -281,7 +385,7 @@ class DashboardViewSet(viewsets.ViewSet):
         ).annotate(
             total_revenue=Sum(F('quantity') * F('unit_price')),
             total_quantity=Sum('quantity')
-        ).order_by('-total_revenue')
+        ).order_by('total_revenue')
         
         return Response(list(category_revenue))
     
@@ -323,16 +427,21 @@ class DashboardViewSet(viewsets.ViewSet):
             total_value=Sum(F('quantity') * F('product__cost_price')),
             total_products=Count('product', distinct=True),
             total_quantity=Sum('quantity')
-        ).order_by('-total_value')
+        ).order_by('total_value')
         
         return Response(list(inventory_by_store))
     
     @action(detail=False, methods=['get'])
     def financial_summary(self, request):
-        """Financial summary including loans, expenses, etc."""
+        """Financial summary including loans, expenses, etc. (filtered by user)."""
+        user = request.user
         month_start = timezone.now().date().replace(day=1)
         
-        # Loans
+        # Get filtered querysets
+        expenses_qs = self._get_expenses_queryset(user)
+        sales_qs = self._get_sales_queryset(user)
+        
+        # Loans - toujours global car pas de système de propriété
         loans_summary = {
             'total_principal': Loan.objects.aggregate(
                 total=Sum('principal_amount')
@@ -349,20 +458,20 @@ class DashboardViewSet(viewsets.ViewSet):
             )['total'] or 0,
         }
         
-        # Expenses
+        # Expenses - FILTRÉ par utilisateur
         expenses_summary = {
-            'this_month': Expense.objects.filter(
+            'this_month': expenses_qs.filter(
                 expense_date__gte=month_start,
                 status='paid'
             ).aggregate(total=Sum('amount'))['total'] or 0,
-            'pending': Expense.objects.filter(
+            'pending': expenses_qs.filter(
                 status__in=['pending', 'approved']
             ).aggregate(total=Sum('amount'))['total'] or 0,
         }
         
-        # Revenue
+        # Revenue - FILTRÉ par utilisateur
         revenue_summary = {
-            'this_month': Sale.objects.filter(
+            'this_month': sales_qs.filter(
                 sale_date__gte=month_start,
                 status='confirmed'
             ).aggregate(total=Sum('total_amount'))['total'] or 0,
@@ -424,7 +533,7 @@ class DashboardViewSet(viewsets.ViewSet):
             expense_date__gte=start_date,
             expense_date__lte=end_date,
             status__in=['paid', 'approved']
-        ).select_related('category')
+        ).select_related('category').order_by('expense_date')
         
         expenses_data = []
         for exp in expenses:
@@ -441,7 +550,7 @@ class DashboardViewSet(viewsets.ViewSet):
             sale_date__gte=start_date,
             sale_date__lte=end_date,
             status='confirmed'
-        ).select_related('customer')
+        ).select_related('customer').order_by('sale_date')
         
         sales_data = []
         for sale in sales:
@@ -469,10 +578,13 @@ class DashboardViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='export-report')
     def export_report(self, request):
-        """Export report as PDF or Excel file with expenses and sales."""
+        """Export report as PDF or Excel file with expenses and sales grouped by category."""
         start_date_str = request.data.get('start_date')
         end_date_str = request.data.get('end_date')
         format_type = request.data.get('format', 'pdf')
+        orientation = request.data.get('orientation', 'landscape')
+        page_size = request.data.get('page_size', 'A4')
+        group_by_category = request.data.get('group_by_category', True)
         
         if not start_date_str or not end_date_str:
             return Response({'error': 'Les dates sont requises'}, status=400)
@@ -490,13 +602,16 @@ class DashboardViewSet(viewsets.ViewSet):
             status__in=['paid', 'approved']
         ).select_related('category')
         
-        expenses_data = []
+        # Grouper les charges par catégorie
+        expenses_by_category = {}
         total_expenses = 0
         for exp in expenses:
-            ref = exp.reference if hasattr(exp, 'reference') else f"EXP-{exp.id}"
-            designation = exp.category.name if exp.category else 'Divers'
+            category_name = exp.category.name if exp.category else 'Divers'
             amount = float(exp.amount)
-            expenses_data.append([ref, designation, amount])
+            if category_name not in expenses_by_category:
+                expenses_by_category[category_name] = {'amount': 0, 'count': 0}
+            expenses_by_category[category_name]['amount'] += amount
+            expenses_by_category[category_name]['count'] += 1
             total_expenses += amount
         
         # Récupérer les ventes
@@ -504,162 +619,222 @@ class DashboardViewSet(viewsets.ViewSet):
             sale_date__gte=start_date,
             sale_date__lte=end_date,
             status='confirmed'
-        ).select_related('customer')
+        ).prefetch_related('items__product')
         
-        sales_data = []
+        # Grouper les ventes par catégorie de produit
+        sales_by_category = {}
         total_sales = 0
         for sale in sales:
-            numero = sale.sale_number if hasattr(sale, 'sale_number') else f"VNT-{sale.id}"
-            
-            # Get product names
-            product_names = []
-            if hasattr(sale, 'items'):
-                for item in sale.items.all()[:3]:
-                    if hasattr(item, 'product') and item.product:
-                        product_names.append(item.product.name)
-            ref = ', '.join(product_names) if product_names else 'Vente'
-            
             amount = float(sale.total_amount)
-            sales_data.append([numero, ref, amount])
             total_sales += amount
+            
+            # Obtenir la catégorie du premier produit de la vente
+            category_name = 'Ventes'
+            if hasattr(sale, 'items'):
+                for item in sale.items.all():
+                    if hasattr(item, 'product') and item.product:
+                        if hasattr(item.product, 'category') and item.product.category:
+                            category_name = item.product.category.name
+                        break
+            
+            if category_name not in sales_by_category:
+                sales_by_category[category_name] = {'amount': 0, 'count': 0}
+            sales_by_category[category_name]['amount'] += amount
+            sales_by_category[category_name]['count'] += 1
         
         # Calculer le résultat
         net_profit = total_sales - total_expenses
         
-        period = f"du {start_date.strftime('%d/%m/%Y')} au {end_date.strftime('%d/%m/%Y')}"
+        period = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
         
         # Generate PDF
         if format_type == 'pdf':
+            from reportlab.lib.pagesizes import A4, landscape
+            
             buffer = BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+            # Utiliser le format paysage
+            page_format = landscape(A4) if orientation == 'landscape' else A4
+            doc = SimpleDocTemplate(buffer, pagesize=page_format, rightMargin=40, leftMargin=40, topMargin=30, bottomMargin=30)
             elements = []
             
             styles = getSampleStyleSheet()
             title_style = ParagraphStyle(
                 'CustomTitle',
                 parent=styles['Heading1'],
-                fontSize=20,
+                fontSize=28,
                 textColor=colors.HexColor('#1a1a1a'),
-                spaceAfter=5,
-                alignment=1
+                spaceAfter=3,
+                fontName='Helvetica-Bold',
+                alignment=0
             )
             subtitle_style = ParagraphStyle(
                 'Subtitle',
                 parent=styles['Normal'],
-                fontSize=12,
-                textColor=colors.HexColor('#666666'),
-                spaceAfter=20,
-                alignment=1
+                fontSize=10,
+                textColor=colors.HexColor('#6b7280'),
+                spaceAfter=15,
+                alignment=0
             )
             section_style = ParagraphStyle(
                 'Section',
                 parent=styles['Heading2'],
-                fontSize=14,
-                textColor=colors.whitesmoke,
-                backColor=colors.HexColor('#1f2937'),
-                spaceAfter=10,
+                fontSize=10,
+                textColor=colors.HexColor('#374151'),
+                spaceAfter=8,
                 spaceBefore=10,
-                leftIndent=10,
-                rightIndent=10
+                fontName='Helvetica-Bold'
             )
             
-            # Titre
-            elements.append(Paragraph("Reporting Mensuel", title_style))
-            elements.append(Paragraph(f"Période {period}", subtitle_style))
+            # En-tête avec période
+            header_data = [
+                [Paragraph("Compte de Résultat", title_style), Paragraph(f"PÉRIODE<br/>{period}<br/>Généré le {datetime.now().strftime('%d/%m/%Y')}", 
+                    ParagraphStyle('HeaderRight', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#9ca3af'), alignment=2))]
+            ]
+            header_table = Table(header_data, colWidths=[400, 300])
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            elements.append(header_table)
             elements.append(Spacer(1, 10))
             
-            # Tableau des Charges
-            elements.append(Paragraph("Charges", section_style))
-            charges_data = [['Réf', 'Désignation', 'Montant']]
-            for exp in expenses_data:
-                charges_data.append([exp[0], exp[1], f"{exp[2]:,.0f}"])
-            charges_data.append(['', 'Total Charges', f"{total_expenses:,.0f}"])
-            
-            charges_table = Table(charges_data, colWidths=[80, 250, 120])
-            charges_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#374151')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                ('TOPPADDING', (0, 0), (-1, 0), 10),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d1d5db'))
+            # Ligne de séparation
+            line = Table([['']], colWidths=[page_format[0] - 80])
+            line.setStyle(TableStyle([
+                ('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
             ]))
-            elements.append(charges_table)
+            elements.append(line)
             elements.append(Spacer(1, 15))
             
-            # Tableau des Ventes
-            elements.append(Paragraph("Ventes", section_style))
-            ventes_data = [['Numéro', 'Réf', 'Montant']]
-            for sale in sales_data:
-                ventes_data.append([sale[0], sale[1], f"{sale[2]:,.0f}"])
-            ventes_data.append(['', 'Total Produits', f"{total_sales:,.0f}"])
-            
-            ventes_table = Table(ventes_data, colWidths=[100, 230, 120])
-            ventes_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#374151')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                ('TOPPADDING', (0, 0), (-1, 0), 10),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d1d5db'))
-            ]))
-            elements.append(ventes_table)
-            elements.append(Spacer(1, 15))
-            
-            # Résultat
-            result_color = colors.HexColor('#10b981') if net_profit >= 0 else colors.HexColor('#ef4444')
-            result_data = [
-                ['Résultat de la période', ''],
-                ['Bénéfice', f"{net_profit:,.0f} FCFA"]
+            # Cartes de résumé
+            result_label = "Bénéfice" if net_profit >= 0 else "Perte"
+            summary_data = [
+                [
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='9' color='#6b7280'>VENTES</font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='9' color='#6b7280'>CHARGES</font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='9' color='#1f2937'><b>RÉSULTAT</b></font></para>", styles['Normal'])
+                ],
+                [
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='24'><b>{total_sales:,.0f}</b></font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='24'><b>{total_expenses:,.0f}</b></font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center' spaceAfter='0'><font size='24'><b>{abs(net_profit):,.0f}</b></font></para>", styles['Normal'])
+                ],
+                [
+                    Paragraph(f"<para align='center'><font size='8' color='#9ca3af'>FCFA</font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center'><font size='8' color='#9ca3af'>FCFA</font></para>", styles['Normal']),
+                    Paragraph(f"<para align='center'><font size='8' color='#6b7280'>{result_label}</font></para>", styles['Normal'])
+                ]
             ]
-            result_table = Table(result_data, colWidths=[300, 150])
-            result_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 14),
-                ('FONTNAME', (0, 1), (0, 1), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (0, 1), 10),
-                ('FONTNAME', (1, 1), (1, 1), 'Helvetica-Bold'),
-                ('FONTSIZE', (1, 1), (1, 1), 18),
-                ('TEXTCOLOR', (1, 1), (1, 1), result_color),
-                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            summary_table = Table(summary_data, colWidths=[230, 230, 230])
+            summary_table.setStyle(TableStyle([
+                # Première ligne - labels
+                ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#f3f4f6')),
+                ('BACKGROUND', (1, 0), (1, 0), colors.HexColor('#f3f4f6')),
+                ('BACKGROUND', (2, 0), (2, 0), colors.white),
+                ('BOX', (0, 0), (0, 2), 1, colors.HexColor('#e5e7eb')),
+                ('BOX', (1, 0), (1, 2), 1, colors.HexColor('#e5e7eb')),
+                ('BOX', (2, 0), (2, 2), 2, colors.HexColor('#1f2937')),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('TOPPADDING', (0, 0), (-1, -1), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 10)
+                ('TOPPADDING', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 5),
+                ('TOPPADDING', (0, 1), (-1, 1), 5),
+                ('BOTTOMPADDING', (0, 1), (-1, 1), 5),
+                ('TOPPADDING', (0, 2), (-1, 2), 5),
+                ('BOTTOMPADDING', (0, 2), (-1, 2), 10),
             ]))
-            elements.append(result_table)
+            elements.append(summary_table)
             elements.append(Spacer(1, 15))
             
-            # Informations complémentaires
-            info_data = [
-                ['Informations complémentaires'],
-                [f"Nombre des charges: {len(expenses_data)}"],
-                [f"Services des produits: {len(sales_data)}"],
-                [f"Ce rapport est établi pour la période {period}. La période représente un bénéfice de {net_profit:,.0f} FCFA."]
-            ]
-            info_table = Table(info_data, colWidths=[450])
-            info_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.whitesmoke),
+            # Tableau des Ventes groupées par catégorie
+            elements.append(Paragraph("PRODUITS D'EXPLOITATION", section_style))
+            sales_data = [['Catégorie', 'Qté', 'Montant']]
+            for category, data in sorted(sales_by_category.items()):
+                sales_data.append([category, str(data['count']), f"{data['amount']:,.0f}"])
+            sales_data.append(['TOTAL PRODUITS', '', f"{total_sales:,.0f}"])
+            
+            sales_table = Table(sales_data, colWidths=[440, 100, 150])
+            sales_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.white),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#6b7280')),
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('TOPPADDING', (0, 0), (-1, -1), 8),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-                ('LEFTPADDING', (0, 0), (-1, -1), 10)
+                ('FONTSIZE', (0, 0), (-1, 0), 8),
+                ('FONTSIZE', (0, 1), (-1, -2), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -2), 6),
+                ('TOPPADDING', (0, 0), (-1, -2), 6),
+                ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#d1d5db')),
+                ('LINEBELOW', (0, 1), (-1, -2), 0.5, colors.HexColor('#f3f4f6')),
+                ('LINEABOVE', (0, -1), (-1, -1), 2, colors.HexColor('#1f2937')),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.white),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#1f2937')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), 10),
+                ('TOPPADDING', (0, -1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
             ]))
-            elements.append(info_table)
+            elements.append(sales_table)
+            elements.append(Spacer(1, 15))
+            
+            # Tableau des Charges groupées par catégorie
+            elements.append(Paragraph("CHARGES D'EXPLOITATION", section_style))
+            expenses_data = [['Catégorie', 'Qté', 'Montant']]
+            for category, data in sorted(expenses_by_category.items()):
+                expenses_data.append([category, str(data['count']), f"{data['amount']:,.0f}"])
+            expenses_data.append(['TOTAL CHARGES', '', f"{total_expenses:,.0f}"])
+            
+            expenses_table = Table(expenses_data, colWidths=[440, 100, 150])
+            expenses_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.white),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#6b7280')),
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 8),
+                ('FONTSIZE', (0, 1), (-1, -2), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, -2), 6),
+                ('TOPPADDING', (0, 0), (-1, -2), 6),
+                ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#d1d5db')),
+                ('LINEBELOW', (0, 1), (-1, -2), 0.5, colors.HexColor('#f3f4f6')),
+                ('LINEABOVE', (0, -1), (-1, -1), 2, colors.HexColor('#1f2937')),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.white),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#1f2937')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), 10),
+                ('TOPPADDING', (0, -1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
+            ]))
+            elements.append(expenses_table)
+            elements.append(Spacer(1, 15))
+            
+            # Statistiques finales
+            stats_data = [[
+                Paragraph(f"<para align='center'><font size='8' color='#6b7280'>Catégories Produits</font><br/><font size='16'>{len(sales_by_category)}</font></para>", styles['Normal']),
+                Paragraph(f"<para align='center'><font size='8' color='#6b7280'>Catégories Charges</font><br/><font size='16'>{len(expenses_by_category)}</font></para>", styles['Normal']),
+                Paragraph(f"<para align='center'><font size='8' color='#6b7280'>Marge Nette</font><br/><font size='16'>{((net_profit / total_sales) * 100) if total_sales > 0 else 0:.1f}%</font></para>", styles['Normal'])
+            ]]
+            stats_table = Table(stats_data, colWidths=[230, 230, 230])
+            stats_table.setStyle(TableStyle([
+                ('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING', (0, 0), (-1, -1), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            elements.append(stats_table)
+            
+            # Pied de page
+            footer_line = Table([['']], colWidths=[page_format[0] - 80])
+            footer_line.setStyle(TableStyle([
+                ('LINEABOVE', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb')),
+            ]))
+            elements.append(Spacer(1, 10))
+            elements.append(footer_line)
+            elements.append(Spacer(1, 5))
+            footer_text = Paragraph(f"<para align='center'><font size='7' color='#9ca3af'>Document généré le {datetime.now().strftime('%d %B %Y')}</font></para>", styles['Normal'])
+            elements.append(footer_text)
             
             doc.build(elements)
             buffer.seek(0)

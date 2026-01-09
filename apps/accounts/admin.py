@@ -84,7 +84,7 @@ class UserAdmin(BaseUserAdmin):
         'employee_id', 'phone'
     ]
     ordering = ['-date_joined']
-    filter_horizontal = ['secondary_roles', 'assigned_stores', 'groups', 'user_permissions']
+    filter_horizontal = ['secondary_roles', 'groups', 'user_permissions']  # 'assigned_stores' commenté
     
     fieldsets = (
         ('Authentification', {
@@ -98,7 +98,7 @@ class UserAdmin(BaseUserAdmin):
         }),
         ('Employé', {
             'fields': (
-                'employee_id', 'role', 'secondary_roles', 'assigned_stores',
+                'employee_id', 'role', 'secondary_roles',  # 'assigned_stores' commenté
                 'hire_date', 'termination_date'
             )
         }),
@@ -145,7 +145,7 @@ class UserAdmin(BaseUserAdmin):
     def get_queryset(self, request):
         """Optimize queryset."""
         qs = super().get_queryset(request)
-        return qs.select_related('role').prefetch_related('secondary_roles', 'assigned_stores')
+        return qs.select_related('role').prefetch_related('secondary_roles')  # 'assigned_stores' commenté
 
 
 @admin.register(Permission)

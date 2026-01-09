@@ -1,11 +1,116 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from apps.accounts.permissions import HasModulePermission
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
+from django.conf import settings as django_settings
+from django.utils.translation import activate, get_language
 from apps.main.models_settings import CompanySettings
 from apps.main.serializers_settings import CompanySettingsSerializer
+
+
+@extend_schema(
+    summary="Obtenir les langues disponibles",
+    tags=["Settings"],
+    responses={200: {
+        'type': 'object',
+        'properties': {
+            'languages': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'code': {'type': 'string'},
+                        'name': {'type': 'string'}
+                    }
+                }
+            },
+            'current': {'type': 'string'}
+        }
+    }}
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_languages(request):
+    """Get available languages."""
+    languages = [
+        {'code': code, 'name': name}
+        for code, name in django_settings.LANGUAGES
+    ]
+    current_language = get_language()
+    
+    return Response({
+        'languages': languages,
+        'current': current_language
+    })
+
+
+@extend_schema(
+    summary="Changer la langue",
+    tags=["Settings"],
+    request={
+        'type': 'object',
+        'properties': {
+            'language': {'type': 'string', 'enum': ['fr', 'en']}
+        }
+    },
+    responses={200: {
+        'type': 'object',
+        'properties': {
+            'language': {'type': 'string'},
+            'message': {'type': 'string'}
+        }
+    }}
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def set_language(request):
+    """Set user language preference."""
+    from django.utils import translation
+    
+    language = request.data.get('language')
+    
+    if not language:
+        return Response(
+            {'error': 'Language code is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Validate language code
+    available_languages = [code for code, name in django_settings.LANGUAGES]
+    if language not in available_languages:
+        return Response(
+            {'error': f'Language not supported. Available: {", ".join(available_languages)}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Activate language for this request
+    translation.activate(language)
+    
+    # Save to session - Django uses '_language' as the session key
+    request.session['_language'] = language
+    request.session.modified = True
+    
+    # Create response
+    response = Response({
+        'language': language,
+        'message': f'Language changed to {language}'
+    })
+    
+    # Also set language cookie for better persistence
+    response.set_cookie(
+        django_settings.LANGUAGE_COOKIE_NAME,
+        language,
+        max_age=django_settings.LANGUAGE_COOKIE_AGE,
+        path=django_settings.LANGUAGE_COOKIE_PATH,
+        domain=django_settings.LANGUAGE_COOKIE_DOMAIN,
+        secure=django_settings.LANGUAGE_COOKIE_SECURE,
+        httponly=django_settings.LANGUAGE_COOKIE_HTTPONLY,
+        samesite=django_settings.LANGUAGE_COOKIE_SAMESITE,
+    )
+    
+    return response
 
 
 @extend_schema_view(

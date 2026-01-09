@@ -300,6 +300,22 @@ class User(AbstractUser, TimeStampedModel):
     # Notes
     notes = models.TextField(blank=True, verbose_name="Notes")
 
+    # Éviter les conflits avec le modèle User Django par défaut
+    groups = models.ManyToManyField(
+        'auth.Group',
+        related_name='tenant_user_set',
+        blank=True,
+        help_text='The groups this user belongs to.',
+        verbose_name='groups',
+    )
+    user_permissions = models.ManyToManyField(
+        'auth.Permission',
+        related_name='tenant_user_set',
+        blank=True,
+        help_text='Specific permissions for this user.',
+        verbose_name='user permissions',
+    )
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
     
@@ -362,7 +378,10 @@ class User(AbstractUser, TimeStampedModel):
             from apps.inventory.models import Store
             return Store.objects.all()
         
-        return self.assigned_stores.all()
+        # TEMPORAIRE: assigned_stores commenté
+        from apps.inventory.models import Store
+        return Store.objects.none()
+        # return self.assigned_stores.all()
     
     def get_display_name(self):
         """Get the best display name for this user."""
@@ -378,7 +397,9 @@ class User(AbstractUser, TimeStampedModel):
         if self.role and self.role.access_scope == 'all':
             return True
         
-        return self.assigned_stores.filter(id=store.id).exists()
+        # TEMPORAIRE: assigned_stores commenté
+        return False
+        # return self.assigned_stores.filter(id=store.id).exists()
     
     def get_default_store(self):
         """
@@ -390,14 +411,18 @@ class User(AbstractUser, TimeStampedModel):
         if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
             return None
         
+        # TEMPORAIRE: assigned_stores commenté
+        return None
         # Pour les autres rôles, retourner le premier magasin assigné
-        return self.assigned_stores.first()
+        # return self.assigned_stores.first()
     
     def has_assigned_stores(self):
         """Check if user has assigned stores (not admin/superadmin)."""
         if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
             return False
-        return self.assigned_stores.exists()
+        # TEMPORAIRE: assigned_stores commenté
+        return False
+        # return self.assigned_stores.exists()
     
     def is_store_restricted(self):
         """

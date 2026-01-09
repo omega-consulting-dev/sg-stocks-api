@@ -448,17 +448,13 @@ class CaisseSoldeView(APIView):
         # 1. Paiements de factures
         invoice_payments_qs = InvoicePayment.objects.all()
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'assigned':
-                    invoice_payments_qs = invoice_payments_qs.filter(invoice__store__in=user.assigned_stores.all())
-                elif user.role.access_scope == 'own':
-                    invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
-            else:
-                invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tous les paiements
+            pass
+        else:
+            # Utilisateur normal voit uniquement les paiements des factures qu'il a créées
+            invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
         
         if store_id:
             invoice_payments_qs = invoice_payments_qs.filter(invoice__store_id=store_id)
@@ -466,20 +462,16 @@ class CaisseSoldeView(APIView):
             total=Sum('amount')
         )['total'] or 0
         
-        # 2. Ventes payées
+        # 2. Ventes payées (créées par l'utilisateur)
         sales_qs = Sale.objects.all()
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'assigned':
-                    sales_qs = sales_qs.filter(store__in=user.assigned_stores.all())
-                elif user.role.access_scope == 'own':
-                    sales_qs = sales_qs.filter(created_by=user)
-            else:
-                sales_qs = sales_qs.filter(created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit toutes les ventes
+            pass
+        else:
+            # Utilisateur normal voit uniquement les ventes qu'il a créées
+            sales_qs = sales_qs.filter(created_by=user)
         
         if store_id:
             sales_qs = sales_qs.filter(store_id=store_id)
@@ -493,17 +485,13 @@ class CaisseSoldeView(APIView):
         # 1. Dépenses
         expenses_qs = Expense.objects.all()
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'assigned':
-                    expenses_qs = expenses_qs.filter(store__in=user.assigned_stores.all())
-                elif user.role.access_scope == 'own':
-                    expenses_qs = expenses_qs.filter(created_by=user)
-            else:
-                expenses_qs = expenses_qs.filter(created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit toutes les dépenses
+            pass
+        else:
+            # Utilisateur normal voit uniquement les dépenses qu'il a créées
+            expenses_qs = expenses_qs.filter(created_by=user)
         
         if store_id:
             expenses_qs = expenses_qs.filter(store_id=store_id)
@@ -514,17 +502,13 @@ class CaisseSoldeView(APIView):
         # 2. Paiements fournisseurs
         supplier_payments_qs = SupplierPayment.objects.all()
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'own':
-                    supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
-                elif user.role.access_scope == 'assigned':
-                    supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
-            else:
-                supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tous les paiements
+            pass
+        else:
+            # Utilisateur normal voit uniquement les paiements qu'il a créés
+            supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
         
         # Note: SupplierPayment n'a pas de champ store
         total_supplier_payments = supplier_payments_qs.aggregate(
@@ -534,18 +518,13 @@ class CaisseSoldeView(APIView):
         # 3. Remboursements d'emprunts
         loan_payments_qs = LoanPayment.objects.all()
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'assigned':
-                    # Filtrer par stores assignés si le loan a un store
-                    loan_payments_qs = loan_payments_qs.filter(loan__store__in=user.assigned_stores.all())
-                elif user.role.access_scope == 'own':
-                    loan_payments_qs = loan_payments_qs.filter(loan__created_by=user)
-            else:
-                loan_payments_qs = loan_payments_qs.filter(loan__created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tous les remboursements
+            pass
+        else:
+            # Utilisateur normal voit uniquement les remboursements qu'il a créés
+            loan_payments_qs = loan_payments_qs.filter(created_by=user)
         
         if store_id:
             loan_payments_qs = loan_payments_qs.filter(loan__store_id=store_id)
@@ -556,17 +535,13 @@ class CaisseSoldeView(APIView):
         # 4. Décaissements (mouvements de caisse sortants)
         cash_movements_out_qs = CashMovement.objects.filter(movement_type='out')
         
-        # Filtrage par utilisateur
-        if not user.is_superuser:
-            if hasattr(user, 'role') and user.role:
-                if user.role.access_scope == 'all':
-                    pass
-                elif user.role.access_scope == 'assigned':
-                    cash_movements_out_qs = cash_movements_out_qs.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
-                elif user.role.access_scope == 'own':
-                    cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
-            else:
-                cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
+        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
+        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tous les mouvements
+            pass
+        else:
+            # Utilisateur normal voit uniquement les mouvements qu'il a créés
+            cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
         
         if store_id:
             cash_movements_out_qs = cash_movements_out_qs.filter(cashbox_session__cashbox__store_id=store_id)
@@ -629,7 +604,7 @@ class DecaissementsListView(APIView):
         cash_movements = CashMovement.objects.filter(
             movement_type='out',
             category='bank_deposit'
-        ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store').order_by('-created_at')
+        ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store').order_by('created_at')
         
         # Filtrage selon le rôle
         if not user.is_superuser:
@@ -819,5 +794,5 @@ class StoreListView(APIView):
     def get(self, request):
         from apps.inventory.models import Store
         
-        stores = Store.objects.filter(is_active=True).values('id', 'name', 'code')
+        stores = Store.objects.filter(is_active=True).values('id', 'name', 'code', 'store_type')
         return Response(list(stores))

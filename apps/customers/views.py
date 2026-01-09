@@ -44,7 +44,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Filtrage sécurisé des clients selon le rôle et access_scope.
-        Les caissiers voient uniquement leurs propres clients.
+        Tous les utilisateurs d'un store voient tous les clients de ce store.
         """
         queryset = super().get_queryset()
         user = self.request.user
@@ -59,54 +59,23 @@ class CustomerViewSet(viewsets.ModelViewSet):
             if user.role.access_scope == 'all':
                 return queryset
             
-            # Magasinier: clients des stores assignés (via ventes dans ces stores)
-            elif user.role.access_scope == 'assigned':
+            # Utilisateurs assignés à des stores OU avec accès 'own'
+            # Tous voient les clients du store (pas seulement ceux qu'ils ont créés)
+            elif user.role.access_scope in ['assigned', 'own']:
                 assigned_stores = user.assigned_stores.all()
                 if assigned_stores.exists():
                     # Importer ici pour éviter les imports circulaires
                     from apps.sales.models import Sale
-                    from apps.invoicing.models import Invoice
                     
-                    # Clients avec ventes dans les stores assignés
-                    customer_ids_from_sales = Sale.objects.filter(
-                        store__in=assigned_stores
-                    ).values_list('customer_id', flat=True).distinct()
-                    
-                    # Clients avec factures dans les stores assignés
-                    customer_ids_from_invoices = Invoice.objects.filter(
-                        store__in=assigned_stores
-                    ).values_list('customer_id', flat=True).distinct()
-                    
-                    # Union des clients + ceux créés par l'utilisateur
+                    # TOUS les clients qui ont des ventes dans les stores assignés
+                    # Peu importe qui a créé le client ou la vente
                     return queryset.filter(
-                        Q(id__in=customer_ids_from_sales) |
-                        Q(id__in=customer_ids_from_invoices) |
-                        Q(created_by=user)
+                        sales__store__in=assigned_stores,
+                        sales__customer__isnull=False
                     ).distinct()
                 else:
+                    # Si pas de store assigné, ne voir que ses propres clients
                     return queryset.filter(created_by=user)
-            
-            # Caissier: uniquement clients créés par lui ou avec qui il a fait des transactions
-            elif user.role.access_scope == 'own':
-                from apps.sales.models import Sale
-                from apps.invoicing.models import Invoice
-                
-                # Clients des ventes créées par le caissier
-                customer_ids_from_sales = Sale.objects.filter(
-                    created_by=user
-                ).values_list('customer_id', flat=True).distinct()
-                
-                # Clients des factures créées par le caissier
-                customer_ids_from_invoices = Invoice.objects.filter(
-                    created_by=user
-                ).values_list('customer_id', flat=True).distinct()
-                
-                # Union des clients + ceux créés directement par le caissier
-                return queryset.filter(
-                    Q(id__in=customer_ids_from_sales) |
-                    Q(id__in=customer_ids_from_invoices) |
-                    Q(created_by=user)
-                ).distinct()
         
         # Par défaut, filtrer par créateur (sécurité)
         return queryset.filter(created_by=user)
@@ -348,7 +317,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         
         payments = InvoicePayment.objects.filter(
             invoice__customer=customer
-        ).select_related('invoice').order_by('-payment_date')
+        ).select_related('invoice').order_by('payment_date')
         
         payments_data = []
         for payment in payments:

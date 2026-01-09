@@ -17,17 +17,28 @@ def auto_generate_invoice_on_confirmation(sender, instance, created, **kwargs):
     
     if not created and instance.status == 'confirmed':
         # Check if invoice doesn't already exist
-        if not hasattr(instance, 'invoice') or not instance.invoice:
-            from apps.invoicing.models import Invoice
-            try:
-                logger.info(f"Creating invoice for sale {instance.id}")
-                invoice = Invoice.generate_from_sale(instance)
+        try:
+            # Try to access the invoice relation
+            existing_invoice = instance.invoice
+            logger.info(f"Sale {instance.id} already has invoice {existing_invoice.id}")
+            return
+        except Exception:
+            # Invoice doesn't exist, create it
+            pass
+        
+        from apps.invoicing.models import Invoice
+        try:
+            logger.info(f"Creating invoice for sale {instance.id}")
+            invoice = Invoice.generate_from_sale(instance)
+            if invoice:
                 logger.info(f"Invoice {invoice.id} created successfully for sale {instance.id}")
-            except Exception as e:
-                # Log error but don't break the save
-                logger.error(f"Failed to auto-generate invoice for sale {instance.id}: {str(e)}")
-        else:
-            logger.info(f"Sale {instance.id} already has invoice {instance.invoice.id}")
+            else:
+                logger.error(f"Invoice.generate_from_sale returned None for sale {instance.id}")
+        except Exception as e:
+            # Log error but don't break the save
+            logger.error(f"Failed to auto-generate invoice for sale {instance.id}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 @receiver(post_save, sender=Sale)

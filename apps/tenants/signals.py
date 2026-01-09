@@ -6,9 +6,66 @@ from myproject.config.env import get_env
 
 @receiver(post_migrate)
 def create_public_tenant(sender, **kwargs):
-    if Company.objects.filter(schema_name='public').exists():
+    """
+    Créer le tenant public uniquement après que l'app tenants soit complètement migrée.
+    TEMPORAIREMENT DÉSACTIVÉ pour permettre les migrations initiales.
+    """
+    return  # DÉSACTIVÉ - Créer le tenant public manuellement après les migrations
+    
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # IMPORTANT: Ne s'exécuter QUE après la migration de l'app tenants
+    # sender.name pour les apps locales est 'apps.tenants'
+    # sender.label est 'tenants'
+    if not (sender.name == 'apps.tenants' or sender.label == 'tenants'):
+        logger.debug(f"Skipping create_public_tenant for sender: {sender.name} / {sender.label}")
         return
+    
+    logger.info("Tentative de création du tenant public...")
+    
+    # Vérifier que la table existe ET est complètement migrée avant de faire des requêtes ORM
+    from django.db import connection
+    with connection.cursor() as cursor:
+        # Vérifier que la table existe
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'tenants_company'
+            );
+        """)
+        table_exists = cursor.fetchone()[0]
+        
+        if not table_exists:
+            logger.info("Table tenants_company n'existe pas encore, skip")
+            return
+        
+        # Vérifier que la table a toutes les colonnes nécessaires
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = 'tenants_company'
+                AND column_name = 'created_on'
+            );
+        """)
+        has_created_on = cursor.fetchone()[0]
+        
+        if not has_created_on:
+            logger.info("Colonne created_on n'existe pas encore, skip")
+            return
+        
+        # Vérifier si le tenant public existe déjà (requête SQL brute pour éviter les erreurs ORM)
+        cursor.execute("SELECT COUNT(*) FROM tenants_company WHERE schema_name = 'public';")
+        public_exists = cursor.fetchone()[0] > 0
+        
+        if public_exists:
+            logger.info("Tenant public existe déjà")
+            return
 
+    # Créer le tenant public
+    logger.info("Création du tenant public...")
     public_tenant = Company.objects.create(
         schema_name='public',
         name='Public Tenant'
@@ -18,13 +75,17 @@ def create_public_tenant(sender, **kwargs):
         tenant=public_tenant,
         is_primary=True
     )
+    logger.info("✓ Tenant public créé avec succès")
 
 
 @receiver(post_save, sender=Company)
 def create_default_roles(sender, instance, created, **kwargs):
     """
     Créer automatiquement les rôles par défaut lors de la création d'un nouveau tenant.
+    DÉSACTIVÉ: Les rôles sont créés manuellement dans le TenantProvisioningSerializer
     """
+    return  # Temporairement désactivé pour éviter le conflit
+    
     if not created or instance.schema_name == 'public':
         return
     

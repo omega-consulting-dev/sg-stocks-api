@@ -38,7 +38,7 @@ class SaleViewSet(viewsets.ModelViewSet):
     filterset_fields = ['customer', 'store', 'status', 'payment_status', 'sale_date']
     search_fields = ['sale_number', 'customer__username']
     ordering_fields = ['sale_date', 'total_amount', 'created_at']
-    ordering = ['-sale_date']
+    ordering = ['sale_date']
     
     def get_queryset(self):
         """
@@ -118,10 +118,12 @@ class SaleViewSet(viewsets.ModelViewSet):
             sale.confirm()
             # Reload the sale instance to get the invoice created by the signal
             sale.refresh_from_db()
-            serializer = self.get_serializer(sale)
+            
             return Response({
                 'message': 'Vente confirmée avec succès',
-                'sale': serializer.data
+                'sale_id': sale.id,
+                'sale_number': sale.sale_number,
+                'status': sale.status
             })
         except ValueError as e:
             return Response(
@@ -629,7 +631,7 @@ class QuoteViewSet(viewsets.ModelViewSet):
     filterset_fields = ['customer', 'store', 'status']
     search_fields = ['quote_number', 'customer__username']
     ordering_fields = ['quote_date', 'created_at']
-    ordering = ['-quote_date']
+    ordering = ['quote_date']
     
     def get_queryset(self):
         queryset = super().get_queryset()

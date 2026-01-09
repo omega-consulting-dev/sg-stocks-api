@@ -10,7 +10,6 @@ from django.db.models import Sum, Count
 from django.utils import timezone
 from django.http import HttpResponse
 import io
-import csv
 from core.utils.export_utils import ExcelExporter, PDFExporter
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
@@ -43,7 +42,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     filterset_fields = ['customer', 'store', 'status', 'invoice_date']
     search_fields = ['invoice_number', 'customer__name', 'customer__email', 'customer__customer_code']
     ordering_fields = ['invoice_date', 'due_date', 'total_amount']
-    ordering = ['-invoice_date']
+    ordering = ['invoice_date']
     
     def get_queryset(self):
         """
@@ -321,10 +320,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         filename = f"factures_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         return PDFExporter.generate_response(buffer, filename)
     
-    @extend_schema(summary="Exporter les factures en CSV", tags=["Invoicing"])
-    @action(detail=False, methods=['get'])
-    def export_csv(self, request):
-        """Export invoices to CSV. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
+    @extend_schema(summary="Exporter les factures en Excel", tags=["Invoicing"])
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request):
+        """Export invoices to Excel. Supports date filtering via query params: date_from (YYYY-MM-DD), date_to (YYYY-MM-DD)."""
         invoices = self.filter_queryset(self.get_queryset())
         
         # Apply date filtering if provided
@@ -347,26 +346,29 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             except ValueError:
                 pass
         
-        response = HttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="factures.csv"'
+        from apps.utils.exporters import ExcelExporter
         
-        writer = csv.writer(response, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        wb, ws = ExcelExporter.create_workbook("Factures")
         
-        writer.writerow(['Numéro', 'Client', 'Date', 'Échéance', 'Montant Total', 'Montant Payé', 'Solde', 'Statut'])
+        # Headers
+        columns = ['Numéro', 'Client', 'Date', 'Échéance', 'Montant Total', 'Montant Payé', 'Solde', 'Statut']
+        ExcelExporter.style_header(ws, columns)
         
-        for invoice in invoices:
-            writer.writerow([
-                invoice.invoice_number,
-                invoice.customer.name if invoice.customer else '',
-                invoice.invoice_date.strftime('%Y-%m-%d'),
-                invoice.due_date.strftime('%Y-%m-%d'),
-                f"{float(invoice.total_amount):,.2f}",
-                f"{float(invoice.paid_amount):,.2f}",
-                f"{float(invoice.balance_due):,.2f}",
-                invoice.get_status_display()
-            ])
+        # Data
+        for row_num, invoice in enumerate(invoices, 2):
+            ws.cell(row=row_num, column=1, value=invoice.invoice_number)
+            ws.cell(row=row_num, column=2, value=invoice.customer.name if invoice.customer else '')
+            ws.cell(row=row_num, column=3, value=invoice.invoice_date.strftime('%Y-%m-%d'))
+            ws.cell(row=row_num, column=4, value=invoice.due_date.strftime('%Y-%m-%d'))
+            ws.cell(row=row_num, column=5, value=float(invoice.total_amount))
+            ws.cell(row=row_num, column=6, value=float(invoice.paid_amount))
+            ws.cell(row=row_num, column=7, value=float(invoice.balance_due))
+            ws.cell(row=row_num, column=8, value=invoice.get_status_display())
         
-        return response
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"factures_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
     
     @extend_schema(summary="Statistiques des factures", tags=["Invoicing"])
     @action(detail=False, methods=['get'])
@@ -405,7 +407,7 @@ class InvoicePaymentViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['invoice', 'payment_method', 'payment_date']
     ordering_fields = ['payment_date', 'amount']
-    ordering = ['-payment_date']
+    ordering = ['payment_date']
     
     def get_queryset(self):
         queryset = super().get_queryset()

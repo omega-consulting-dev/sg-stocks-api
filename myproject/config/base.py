@@ -60,6 +60,11 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Douala'
 
+# Pour le développement : exécuter les tâches de manière synchrone si Redis n'est pas disponible
+# En production, mettez CELERY_TASK_ALWAYS_EAGER = False et lancez un worker Celery
+CELERY_TASK_ALWAYS_EAGER = env.bool('CELERY_TASK_ALWAYS_EAGER', default=True)
+CELERY_TASK_EAGER_PROPAGATES = True
+
 # Email
 EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
 EMAIL_HOST = env('EMAIL_HOST', default='')
@@ -106,8 +111,7 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.CustomPageNumberPagination',
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DATETIME_FORMAT': '%Y-%m-%d %H:%M:%S',
     'DATE_FORMAT': '%Y-%m-%d',
@@ -147,19 +151,32 @@ CHANNEL_LAYERS = {
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-AUTH_USER_MODEL = 'accounts.User'
+
+# Configuration du modèle User personnalisé pour les tenants
+# Le modèle public garde le User Django par défaut
+AUTH_USER_MODEL = 'accounts.User'  # Utilise accounts.User pour les tenants
+
 AUDITLOG_LOGENTRY_MODEL = "auditlog.LogEntry"
 # Application definition
 SHARED_APPS = (
+    # Django tenants DOIT être en premier
     'django_tenants',
-    'django.contrib.contenttypes',
-    'django.contrib.auth',
+    
+    # Apps Django de base (dans l'ordre de dépendance)
+    'django.contrib.contenttypes',  # Requis par auth et admin
+    'django.contrib.auth',  # Requis par admin et accounts
     'django.contrib.sessions',
     'django.contrib.messages',
+    
+    # Apps locales
+    'apps.tenants',  # Modèle de tenant utilisé partout
+    'apps.accounts',  # Modèle User utilisé partout (AUTH_USER_MODEL)
+    
+    # Admin après accounts
     'django.contrib.admin',
     'django.contrib.staticfiles',
 
-    # External
+    # Apps externes
     'rest_framework',
     'rest_framework_simplejwt',
     'drf_spectacular',
@@ -169,44 +186,47 @@ SHARED_APPS = (
     'celery',
     'channels',
 
-    # Local
-    'apps.tenants',
+    # Apps locales partagées
     'apps.main',
     'core',
 )
 
 TENANT_APPS = (
+    # Django de base (dans l'ordre de dépendance)
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'django.contrib.sessions',
 
-    # External
+    # Apps locales (accounts doit être ici car il a des relations vers inventory)
+    'apps.accounts',  # Contient des relations vers inventory.Store
+    
+    # Apps externes (guardian dépend de auth)
     'guardian',
     'auditlog',
 
-    # Local
-    'apps.accounts',
-    'apps.products',
+    # Apps métier (dans l'ordre logique de dépendance)
+    'apps.products',  # Base: produits et services
     'apps.services',
-    'apps.inventory',
-    'apps.sales',
-    'apps.invoicing',
-    'apps.customers',
-    'apps.suppliers',
-    'apps.cashbox',
-    'apps.loans',
-    'apps.expenses',
-    'apps.analytics',
+    'apps.customers',  # Requis par sales et invoicing
+    'apps.suppliers',  # Requis par inventory
+    'apps.inventory',  # Utilise products et stores
+    'apps.sales',  # Utilise products, customers, inventory
+    'apps.invoicing',  # Utilise sales et customers
+    'apps.cashbox',  # Utilise sales
+    'apps.loans',  # Utilise customers
+    'apps.expenses',  # Indépendant
+    'apps.analytics',  # Utilise toutes les autres apps
 )
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
     'django_tenants.middleware.main.TenantMainMiddleware',
     'apps.tenants.middelware.TenantHeaderMiddleware',
 
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.locale.LocaleMiddleware',  # Language selection middleware
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -289,10 +309,34 @@ LOGGING = {
 
 
 # Internationalization
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'fr'
 TIME_ZONE = 'Africa/Douala'
 USE_I18N = True
+USE_L10N = True
 USE_TZ = True
+
+# Supported languages
+LANGUAGES = [
+    ('fr', 'Français'),
+    ('en', 'English'),
+]
+
+# Path to translation files
+LOCALE_PATHS = [
+    BASE_DIR / 'locale',
+]
+
+# Language cookie settings
+LANGUAGE_COOKIE_NAME = 'django_language'
+LANGUAGE_COOKIE_AGE = 365 * 24 * 60 * 60  # 1 year
+LANGUAGE_COOKIE_PATH = '/'
+LANGUAGE_COOKIE_DOMAIN = None
+LANGUAGE_COOKIE_SECURE = False  # Set to True in production with HTTPS
+LANGUAGE_COOKIE_HTTPONLY = False  # Set to True if you don't need JS access
+LANGUAGE_COOKIE_SAMESITE = 'Lax'
+
+# Middleware for language selection (add to MIDDLEWARE if not present)
+# 'django.middleware.locale.LocaleMiddleware',
 
 # Static files
 STATIC_URL = '/static/'

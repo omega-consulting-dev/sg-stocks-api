@@ -70,37 +70,16 @@ def notify_invoice_status_change(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender='products.Product')
 def notify_stock_issues(sender, instance, created, **kwargs):
-    """Notifier lors de problèmes de stock - uniquement admin et managers avec access_scope='all'"""
-    if not created:  # Seulement sur mise à jour
-        from core.notifications import notify_stock_rupture, notify_stock_low
-        
-        # Récupérer uniquement les admin/managers (access_scope='all')
-        # Les caissiers et magasiniers ne doivent pas être notifiés de tous les stocks
-        users = User.objects.filter(
-            is_active=True,
-            role__can_manage_inventory=True,
-            role__access_scope='all'  # Uniquement admin/manager
-        )
-        
-        # Rupture de stock
-        if instance.stock_quantity == 0:
-            for user in users:
-                notify_stock_rupture(
-                    user=user,
-                    product_name=instance.name,
-                    product_id=instance.id
-                )
-        # Stock faible
-        elif hasattr(instance, 'reorder_level') and instance.reorder_level:
-            if instance.stock_quantity <= instance.reorder_level:
-                for user in users:
-                    notify_stock_low(
-                        user=user,
-                        product_name=instance.name,
-                        product_id=instance.id,
-                        current_quantity=instance.stock_quantity,
-                        reorder_level=instance.reorder_level
-                    )
+    """
+    Notifier lors de problèmes de stock - DÉSACTIVÉ
+    
+    Le modèle Product n'a pas d'attribut stock_quantity direct.
+    Le stock est géré via le modèle Stock (stock par magasin) dans apps.inventory.
+    
+    ✅ Le signal de notification de stock est maintenant dans apps/inventory/signals.py
+       et se déclenche sur le modèle Stock lors des modifications de stock.
+    """
+    pass
 
 
 # ============= USER MANAGEMENT SIGNALS =============

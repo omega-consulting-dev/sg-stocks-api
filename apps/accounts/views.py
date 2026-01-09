@@ -73,7 +73,7 @@ class UserViewSet(viewsets.ModelViewSet):
     """
     
     queryset = User.objects.select_related('role').prefetch_related(
-        'secondary_roles', 'assigned_stores'
+        'secondary_roles'  # 'assigned_stores' commenté temporairement
     )
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -83,7 +83,7 @@ class UserViewSet(viewsets.ModelViewSet):
         'employee_id'
     ]
     ordering_fields = ['date_joined', 'username', 'last_name', 'email']
-    ordering = ['-date_joined']
+    ordering = ['date_joined']
     
     def get_serializer_class(self):
         """Return appropriate serializer based on action."""
@@ -113,11 +113,13 @@ class UserViewSet(viewsets.ModelViewSet):
             return queryset
         
         # Les autres ne voient que les utilisateurs des magasins assignés
-        accessible_stores = user.get_accessible_stores()
-        return queryset.filter(
-            Q(assigned_stores__in=accessible_stores) |
-            Q(id=user.id)  # Peut toujours voir son propre profil
-        ).distinct()
+        # TEMPORAIRE: assigned_stores commenté, retourne tous les utilisateurs
+        # accessible_stores = user.get_accessible_stores()
+        # return queryset.filter(
+        #     Q(assigned_stores__in=accessible_stores) |
+        #     Q(id=user.id)  # Peut toujours voir son propre profil
+        # ).distinct()
+        return queryset
     
     def destroy(self, request, *args, **kwargs):
         """Soft delete: mark as inactive instead of deleting."""
@@ -284,7 +286,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def activities(self, request, pk=None):
         """Get user activities."""
         user = self.get_object()
-        activities = UserActivity.objects.filter(user=user).order_by('-created_at')[:50]
+        activities = UserActivity.objects.filter(user=user).order_by('created_at')[:50]
         serializer = UserActivitySerializer(activities, many=True)
         return Response(serializer.data)
     
@@ -297,7 +299,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def sessions(self, request, pk=None):
         """Get user sessions."""
         user = self.get_object()
-        sessions = UserSession.objects.filter(user=user).order_by('-login_time')[:20]
+        sessions = UserSession.objects.filter(user=user).order_by('login_time')[:20]
         serializer = UserSessionSerializer(sessions, many=True)
         return Response(serializer.data)
 
@@ -385,14 +387,14 @@ class UserSessionViewSet(viewsets.ReadOnlyModelViewSet):
     ViewSet for UserSession model (read-only).
     """
     
-    queryset = UserSession.objects.select_related('user').order_by('-login_time')
+    queryset = UserSession.objects.select_related('user').order_by('login_time')
     serializer_class = UserSessionSerializer
     permission_classes = [IsAuthenticated, IsAdminOrManager]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['user', 'is_active']
     search_fields = ['user__username', 'ip_address']
     ordering_fields = ['login_time', 'logout_time']
-    ordering = ['-login_time']
+    ordering = ['login_time']
     
     @extend_schema(
         summary="Terminer une session",
@@ -421,12 +423,12 @@ class UserActivityViewSet(viewsets.ReadOnlyModelViewSet):
     ViewSet for UserActivity model (read-only).
     """
     
-    queryset = UserActivity.objects.select_related('user').order_by('-created_at')
+    queryset = UserActivity.objects.select_related('user').order_by('created_at')
     serializer_class = UserActivitySerializer
     permission_classes = [IsAuthenticated, IsAdminOrManager]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['user', 'action', 'module']
     search_fields = ['user__username', 'description', 'module']
     ordering_fields = ['created_at', 'action']
-    ordering = ['-created_at']
+    ordering = ['created_at']
 

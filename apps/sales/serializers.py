@@ -1,6 +1,7 @@
 """Sales serializers - Updated 2025-12-15"""
 from rest_framework import serializers
 from apps.sales.models import Sale, SaleLine, Quote, QuoteLine
+from apps.customers.models import Customer
 
 
 class SaleLineSerializer(serializers.ModelSerializer):
@@ -66,8 +67,8 @@ class SaleDetailSerializer(serializers.ModelSerializer):
     lines = SaleLineSerializer(many=True, read_only=True)
     customer = serializers.SerializerMethodField()
     store = serializers.SerializerMethodField()
-    balance_due = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    is_fully_paid = serializers.BooleanField(read_only=True)
+    balance_due = serializers.SerializerMethodField()
+    is_fully_paid = serializers.SerializerMethodField()
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     payments = serializers.SerializerMethodField()
     invoice_id = serializers.SerializerMethodField()
@@ -91,6 +92,14 @@ class SaleDetailSerializer(serializers.ModelSerializer):
     def get_store(self, obj):
         return {'id': obj.store.id, 'name': obj.store.name}
     
+    def get_balance_due(self, obj):
+        """Convert Decimal balance_due to float for JSON serialization."""
+        return float(obj.balance_due)
+    
+    def get_is_fully_paid(self, obj):
+        """Return is_fully_paid property."""
+        return obj.is_fully_paid
+    
     def get_payments(self, obj):
         # TODO: Ajouter le modèle Payment plus tard
         # Pour l'instant, retourner une liste vide
@@ -108,6 +117,11 @@ class SaleCreateSerializer(serializers.ModelSerializer):
     
     lines = SaleLineSerializer(many=True)
     paid_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=Customer.objects.all(),
+        required=False,
+        allow_null=True
+    )
     
     class Meta:
         model = Sale
@@ -118,6 +132,7 @@ class SaleCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         lines_data = validated_data.pop('lines')
         paid_amount = validated_data.pop('paid_amount', 0)
+        customer = validated_data.get('customer')
         
         # Generate sale number
         from django.utils import timezone
@@ -140,6 +155,13 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         
         # Calculate totals (this will also update payment_status based on paid_amount)
         sale.calculate_totals()
+        
+        # Validation: Les clients de passage doivent payer la totalité
+        if not customer and sale.balance_due > 0:
+            raise serializers.ValidationError({
+                'paid_amount': 'Les clients de passage doivent payer la totalité. Veuillez sélectionner un client pour autoriser le crédit.'
+            })
+        
         sale.save()
         
         return sale

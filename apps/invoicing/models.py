@@ -172,8 +172,18 @@ class Invoice(AuditModel):
         if sale.status not in ['confirmed', 'completed']:
             raise ValueError('Can only generate invoice from confirmed or completed sales')
         
-        if hasattr(sale, 'invoice') and sale.invoice:
-            raise ValueError('Invoice already exists for this sale')
+        # Check if sale has a customer
+        if not sale.customer:
+            raise ValueError('Cannot generate invoice for a sale without a customer')
+        
+        # Check if invoice already exists
+        try:
+            existing_invoice = sale.invoice
+            if existing_invoice:
+                raise ValueError('Invoice already exists for this sale')
+        except cls.DoesNotExist:
+            # No invoice exists, we can create one
+            pass
         
         # Calculate due date based on payment term
         payment_term_days = {
