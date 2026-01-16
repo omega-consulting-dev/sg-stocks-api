@@ -156,15 +156,60 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         # Calculate totals (this will also update payment_status based on paid_amount)
         sale.calculate_totals()
         
-        # Validation: Les clients de passage doivent payer la totalité
-        if not customer and sale.balance_due > 0:
+        # Validation: Les clients de passage (No Name ou sans client) doivent payer la totalité
+        is_no_name_customer = False
+        if customer:
+            # Vérifier si c'est un client "No Name" / "Client de passage"
+            customer_name = customer.name.lower() if hasattr(customer, 'name') else ''
+            is_no_name_customer = any(keyword in customer_name for keyword in [
+                'no name', 'client no name', 'client de passage', 'passage'
+            ])
+        
+        if (not customer or is_no_name_customer) and sale.balance_due > 0:
             raise serializers.ValidationError({
-                'paid_amount': 'Les clients de passage doivent payer la totalité. Veuillez sélectionner un client pour autoriser le crédit.'
+                'paid_amount': 'Les clients de passage ne peuvent pas avoir de crédit. Veuillez payer la totalité ou créer un client réel pour autoriser le crédit.'
             })
         
         sale.save()
         
         return sale
+    
+    def update(self, instance, validated_data):
+        """Update sale and its lines."""
+        lines_data = validated_data.pop('lines', [])
+        paid_amount = validated_data.pop('paid_amount', instance.paid_amount)
+        
+        # Update sale fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Arrondir paid_amount à 2 décimales
+        if paid_amount:
+            from decimal import Decimal
+            paid_amount = Decimal(str(paid_amount)).quantize(Decimal('0.01'))
+        
+        instance.paid_amount = paid_amount
+        
+        # Delete existing lines and create new ones
+        instance.lines.all().delete()
+        
+        for line_data in lines_data:
+            SaleLine.objects.create(sale=instance, **line_data)
+        
+        # Recalculate totals
+        instance.calculate_totals()
+        instance.save()
+        
+        # NOTE: Ne pas gérer les mouvements de stock ici !
+        # Si la vente est confirmée, le signal auto_generate_invoice_on_confirmation
+        # appellera Invoice.update_from_sale() qui gèrera les mouvements de stock
+        # via la facture. Cela évite les doublons.
+        
+        return instance
+    
+    def partial_update(self, instance, validated_data):
+        """Partial update - delegate to full update."""
+        return self.update(instance, validated_data)
 
 
 class QuoteLineSerializer(serializers.ModelSerializer):

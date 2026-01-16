@@ -96,6 +96,11 @@ class Company(TenantMixin):
         default=19.25,
         verbose_name="Taux de TVA (%)"
     )
+    allow_flexible_pricing = models.BooleanField(
+        default=False,
+        verbose_name="Autoriser les prix flexibles en facturation",
+        help_text="Si activé, le prix unitaire peut être modifié lors de la facturation. Sinon, le prix est verrouillé et tout surplus crée un solde restant."
+    )
     
     # Automatically create schema
     auto_create_schema = True

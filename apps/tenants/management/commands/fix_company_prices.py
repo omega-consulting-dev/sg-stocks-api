@@ -32,12 +32,12 @@ class Command(BaseCommand):
                 
                 self.stdout.write(
                     self.style.SUCCESS(
-                        f'✅ {company.name} ({company.plan}): {old_price} XAF → {expected_price} XAF'
+                        f'[OK] {company.name} ({company.plan}): {old_price} XAF -> {expected_price} XAF'
                     )
                 )
                 updated_count += 1
         
         # Résumé
         self.stdout.write('\n' + '='*60)
-        self.stdout.write(self.style.SUCCESS(f'✅ {updated_count} entreprise(s) mise(s) à jour'))
+        self.stdout.write(self.style.SUCCESS(f'[OK] {updated_count} entreprise(s) mise(s) à jour'))
         self.stdout.write('='*60)

@@ -1,6 +1,75 @@
 """
 Inventory views for API.
-"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        print(f"[ERREUR] Le transfert n'est pas en brouillon (status: {transfer.status})")    else:        print(f"[OK] Transfert validé avec succès! Status: {transfer.status}")        print()                transfer.save()        transfer.validated_by = admin        transfer.status = 'in_transit'                    print(f"    StockMovement créé")            )                created_by=admin                date=transfer.transfer_date,                notes=f'Transfert vers {transfer.destination_store.name}',                reference=transfer.transfer_number,                quantity=line.quantity_sent,                movement_type='transfer',                destination_store=transfer.destination_store,                store=transfer.source_store,                product=line.product,            StockMovement.objects.create(            # Créer un mouvement de stock                        print(f"    Stock {transfer.source_store.name}: {old_qty} -> {stock.quantity}")            stock.save()            stock.quantity -= line.quantity_sent            old_qty = stock.quantity            )                store=transfer.source_store                product=line.product,            stock = Stock.objects.get(            # Decrease stock in source                        print(f"  - {line.product.name}: {line.quantity_sent}")            line.save()            line.quantity_sent = line.quantity_requested        for line in transfer.lines.all():        # Update quantities sent and decrease stock                admin = User.objects.get(username='admin')        # Récupérer l'utilisateur admin                print("Validation du transfert...")    if transfer.status == 'draft':        print()    print(f"Destination: {transfer.destination_store.name}")    print(f"Source: {transfer.source_store.name}")    print(f"Status actuel: {transfer.status}")    print(f"Transfert: {transfer.transfer_number}")        transfer = StockTransfer.objects.get(transfer_number='TR202600004')    # Récupérer le transfert en draftwith schema_context(tenant.schema_name):tenant = Company.objects.get(schema_name='santa')from django.utils import timezonefrom apps.tenants.models import Companyfrom django_tenants.utils import schema_contextfrom apps.accounts.models import Userfrom apps.inventory.models import StockTransfer, StockMovement, Stockdjango.setup()os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.config.dev')sys.path.insert(0, os.path.dirname(__file__))import django"""
 
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
@@ -519,8 +588,8 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = StockMovementFilterSet
     search_fields = ['product__name', 'reference', 'supplier__name', 'supplier__supplier_code']
-    ordering_fields = ['date', 'created_at']
-    ordering = ['date', 'created_at']  # Tri par date de réalisation (du plus ancien au plus récent)
+    ordering_fields = ['date', 'created_at', 'reference']
+    ordering = ['-date', '-id']  # Tri par date décroissante (plus récent en premier), puis par ID
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):
@@ -669,19 +738,19 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
                         "Veuillez d'abord annuler ces sorties."
                     )
                 stock.quantity -= movement.quantity
-                logger.info(f"[REVERSE] Entrée annulée: {stock.quantity + movement.quantity} → {stock.quantity}")
+                logger.info(f"[REVERSE] Entrée annulée: {stock.quantity + movement.quantity} -> {stock.quantity}")
                 stock.save(update_fields=['quantity', 'updated_at'])
                 
             elif movement.movement_type == 'out':
                 # Inverser une sortie: ajouter la quantité
                 stock.quantity += movement.quantity
-                logger.info(f"[REVERSE] Sortie annulée: {stock.quantity - movement.quantity} → {stock.quantity}")
+                logger.info(f"[REVERSE] Sortie annulée: {stock.quantity - movement.quantity} -> {stock.quantity}")
                 stock.save(update_fields=['quantity', 'updated_at'])
                 
             elif movement.movement_type == 'transfer':
                 # Inverser un transfert: rajouter au stock source et retirer de la destination
                 stock.quantity += movement.quantity
-                logger.info(f"[REVERSE] Transfert annulé (source): {stock.quantity - movement.quantity} → {stock.quantity}")
+                logger.info(f"[REVERSE] Transfert annulé (source): {stock.quantity - movement.quantity} -> {stock.quantity}")
                 stock.save(update_fields=['quantity', 'updated_at'])
                 
                 if movement.destination_store:
@@ -698,7 +767,7 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
                                 f"transférée ({movement.quantity})."
                             )
                         dest_stock.quantity -= movement.quantity
-                        logger.info(f"[REVERSE] Transfert annulé (destination): {dest_stock.quantity + movement.quantity} → {dest_stock.quantity}")
+                        logger.info(f"[REVERSE] Transfert annulé (destination): {dest_stock.quantity + movement.quantity} -> {dest_stock.quantity}")
                         dest_stock.save(update_fields=['quantity', 'updated_at'])
                     except Stock.DoesNotExist:
                         # Si le stock destination n'existe pas, c'est ok pour la suppression
@@ -752,7 +821,7 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
             stock.save(update_fields=['quantity', 'updated_at'])
 
     @extend_schema(summary="Exporter les mouvements en Excel", tags=["Inventory"])
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_excel(self, request):
         """Export stock movements to Excel with filtering.
         Supports all filters from the list endpoint:
@@ -826,6 +895,99 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
+        
+        return response
+
+    @extend_schema(summary="Exporter les mouvements en PDF", tags=["Inventory"])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def export_pdf(self, request):
+        """Export stock movements to PDF with filtering.
+        Supports all filters from the list endpoint:
+        - movement_type: 'in', 'out', 'transfer'
+        - date_from: YYYY-MM-DD
+        - date_to: YYYY-MM-DD
+        - supplier: supplier id
+        - product: product id
+        - store: store id
+        - search: search in product name, reference, supplier name
+        """
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.units import cm
+        from io import BytesIO
+        
+        # Use filter_queryset to apply all configured filters
+        movements = self.filter_queryset(self.get_queryset())
+        
+        # Sort movements by date
+        movements_list = list(movements.order_by('date', 'created_at'))
+        
+        # Create PDF in memory
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+        elements = []
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = styles['Title']
+        
+        # Title
+        title = Paragraph("MOUVEMENTS DE STOCK", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Prepare table data
+        data = [['Date', 'Produit', 'Type', 'Quantité', 'Magasin', 'Référence']]
+        
+        for movement in movements_list:
+            movement_type_display = {
+                'in': 'Entrée',
+                'out': 'Sortie',
+                'transfer': 'Transfert',
+                'adjustment': 'Ajustement',
+                'return': 'Retour'
+            }.get(movement.movement_type, movement.movement_type)
+            
+            data.append([
+                movement.date.strftime('%d/%m/%Y') if movement.date else movement.created_at.strftime('%d/%m/%Y'),
+                movement.product.name[:40],  # Limit length
+                movement_type_display,
+                str(movement.quantity),
+                movement.store.name[:20],  # Limit length
+                movement.reference or '-'
+            ])
+        
+        # Create table
+        table = Table(data, colWidths=[3*cm, 6*cm, 3*cm, 2.5*cm, 4*cm, 4*cm])
+        
+        # Style table
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Quantité à droite
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+        ]))
+        
+        elements.append(table)
+        
+        # Build PDF
+        doc.build(elements)
+        
+        # Generate response
+        buffer.seek(0)
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        filename = f"mouvements_stock_{timezone.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         
         return response
 
@@ -1042,13 +1204,54 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
     
+    def update(self, request, *args, **kwargs):
+        """Update transfer - only allowed for draft status."""
+        transfer = self.get_object()
+        
+        # Vérifier le statut
+        if transfer.status != 'draft':
+            return Response(
+                {
+                    'error': 'Seuls les transferts en brouillon peuvent être modifiés.',
+                    'detail': 'Pour modifier ce transfert, annulez-le d\'abord puis créez-en un nouveau.',
+                    'current_status': transfer.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Continuer avec la mise à jour normale
+        return super().update(request, *args, **kwargs)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Partial update - only allowed for draft status."""
+        transfer = self.get_object()
+        
+        if transfer.status != 'draft':
+            return Response(
+                {
+                    'error': 'Seuls les transferts en brouillon peuvent être modifiés.',
+                    'detail': 'Pour modifier ce transfert, annulez-le d\'abord puis créez-en un nouveau.',
+                    'current_status': transfer.status
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return super().partial_update(request, *args, **kwargs)
+    
     def _can_validate_transfer(self, transfer):
         """Vérifier si l'utilisateur peut valider le transfert (envoi)."""
         user = self.request.user
         
         # Admin peut tout faire
-        if user.is_superuser or user.role.name == 'super_admin':
+        if user.is_superuser:
             return True
+        
+        if user.role and user.role.name == 'super_admin':
+            return True
+        
+        # Doit avoir un rôle
+        if not user.role:
+            return False
         
         # Doit avoir la permission de gérer l'inventaire
         if not user.role.can_manage_inventory:
@@ -1211,7 +1414,7 @@ class StockTransferViewSet(viewsets.ModelViewSet):
                     quantity=line.quantity_received,
                     reference=transfer.transfer_number,
                     notes=f'Transfert reçu depuis {transfer.source_store.name}',
-                    date=transfer.actual_arrival or timezone.now().date(),
+                    date=transfer.transfer_date,
                     created_by=request.user
                 )
             
@@ -1251,30 +1454,120 @@ class StockTransferViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Annuler le transfert", tags=["Inventory"])
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        """Cancel transfer."""
+        """Cancel transfer and restore stock."""
         transfer = self.get_object()
         
-        if transfer.status not in ['draft', 'in_transit']:
+        if transfer.status == 'cancelled':
+            return Response(
+                {'error': 'Ce transfert est déjà annulé.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if transfer.status not in ['draft', 'in_transit', 'received']:
             return Response(
                 {'error': 'Ce transfert ne peut pas être annulé.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Si le transfert était en transit, remettre le stock au magasin source
-        if transfer.status == 'in_transit':
-            for line in transfer.lines.all():
-                stock = Stock.objects.get(
-                    product=line.product,
-                    store=transfer.source_store
-                )
-                stock.quantity += line.quantity_sent
-                stock.save()
-        
-        transfer.status = 'cancelled'
-        transfer.save()
+        # Utiliser une transaction atomique pour garantir la cohérence
+        with transaction.atomic():
+            if transfer.status == 'in_transit':
+                # Cas 1: Transfert en transit - remettre le stock au magasin source
+                # IMPORTANT: Ne PAS supprimer le mouvement "transfer" car si on le supprime,
+                # on doit gérer manuellement le retour. Au lieu de cela, on crée un mouvement
+                # inverse pour tracer l'annulation
+                
+                for line in transfer.lines.all():
+                    # Remettre au stock source
+                    stock = Stock.objects.select_for_update().get(
+                        product=line.product,
+                        store=transfer.source_store
+                    )
+                    stock.quantity += line.quantity_sent
+                    stock.save()
+                    
+                    # Créer un mouvement "in" pour tracer le retour au magasin source
+                    StockMovement.objects.create(
+                        product=line.product,
+                        store=transfer.source_store,
+                        movement_type='in',
+                        quantity=line.quantity_sent,
+                        reference=f"{transfer.transfer_number}-ANNULE",
+                        notes=f'Annulation du transfert {transfer.transfer_number} (en transit)',
+                        date=transfer.transfer_date,
+                        created_by=request.user if hasattr(request, 'user') else None
+                    )
+            
+            elif transfer.status == 'received':
+                # Cas 2: Transfert reçu - inverser complètement
+                # IMPORTANT: Ne PAS supprimer les mouvements car le signal post_delete 
+                # inverserait automatiquement les stocks (double inversion)
+                # À la place, on crée des mouvements inverses pour tracer l'annulation
+                
+                for line in transfer.lines.all():
+                    # Vérifier le stock destination
+                    dest_stock = Stock.objects.select_for_update().get(
+                        product=line.product,
+                        store=transfer.destination_store
+                    )
+                    
+                    if dest_stock.quantity < line.quantity_received:
+                        return Response(
+                            {
+                                'error': f'Stock insuffisant pour annuler le transfert.',
+                                'detail': f'Le produit "{line.product.name}" a un stock de {dest_stock.quantity} '
+                                         f'dans "{transfer.destination_store.name}" mais {line.quantity_received} '
+                                         f'sont nécessaires pour annuler le transfert.'
+                            },
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    
+                    # Retirer du stock destination
+                    dest_stock.quantity -= line.quantity_received
+                    dest_stock.save()
+                    
+                    # Créer un mouvement "out" pour tracer la sortie lors de l'annulation
+                    StockMovement.objects.create(
+                        product=line.product,
+                        store=transfer.destination_store,
+                        movement_type='out',
+                        quantity=line.quantity_received,
+                        reference=f"{transfer.transfer_number}-ANNULE",
+                        notes=f'Annulation du transfert {transfer.transfer_number}',
+                        date=transfer.transfer_date,
+                        created_by=request.user if hasattr(request, 'user') else None
+                    )
+                    
+                    # Remettre au stock source
+                    source_stock = Stock.objects.select_for_update().get(
+                        product=line.product,
+                        store=transfer.source_store
+                    )
+                    source_stock.quantity += line.quantity_received
+                    source_stock.save()
+                    
+                    # Créer un mouvement "in" pour tracer le retour au magasin source
+                    StockMovement.objects.create(
+                        product=line.product,
+                        store=transfer.source_store,
+                        movement_type='in',
+                        quantity=line.quantity_received,
+                        reference=f"{transfer.transfer_number}-ANNULE",
+                        notes=f'Retour suite à l\'annulation du transfert {transfer.transfer_number}',
+                        date=transfer.transfer_date,
+                        created_by=request.user if hasattr(request, 'user') else None
+                    )
+            
+            # Marquer le transfert comme annulé
+            transfer.status = 'cancelled'
+            transfer.cancelled_by = request.user if hasattr(request, 'user') else None
+            transfer.save()
         
         serializer = self.get_serializer(transfer)
-        return Response(serializer.data)
+        return Response({
+            'message': 'Transfert annulé avec succès. Les stocks ont été restaurés.',
+            'transfer': serializer.data
+        })
     
     @extend_schema(summary="Exporter les transferts en Excel", tags=["Inventory"])
     @action(detail=False, methods=['get'])

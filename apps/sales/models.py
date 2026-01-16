@@ -136,13 +136,14 @@ class Sale(AuditModel):
             self.payment_status = 'partial'
     
     def confirm(self):
-        """Confirm sale and decrement stock."""
+        """Confirm sale - stock movements will be created by the invoice."""
         from apps.inventory.models import Stock
         
         if self.status != 'draft':
             raise ValueError('Only draft sales can be confirmed')
         
-        # Decrement stock for each product line
+        # Vérifier le stock disponible SANS créer de mouvements
+        # Les mouvements seront créés par la facture via le signal auto_generate_invoice_on_confirmation
         for line in self.lines.filter(line_type='product', product__isnull=False):
             try:
                 stock = Stock.objects.get(
@@ -154,8 +155,6 @@ class Sale(AuditModel):
                         f'Stock insuffisant pour {line.product.name}. '
                         f'Disponible: {stock.available_quantity}, Demandé: {line.quantity}'
                     )
-                stock.quantity -= line.quantity
-                stock.save()
             except Stock.DoesNotExist:
                 raise ValueError(f'Aucun stock trouvé pour {line.product.name} dans ce magasin')
         

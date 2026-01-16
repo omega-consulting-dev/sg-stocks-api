@@ -38,6 +38,45 @@ class StoreSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at']
     
+    def validate_code(self, value):
+        """Validate that code is unique."""
+        if not value:
+            raise serializers.ValidationError("Le code du magasin est obligatoire.")
+        
+        # Vérifier l'unicité en excluant l'instance actuelle si en mode édition
+        instance = self.instance
+        queryset = Store.objects.filter(code=value)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        
+        if queryset.exists():
+            raise serializers.ValidationError("Un magasin avec ce code existe déjà.")
+        
+        return value
+    
+    def validate_name(self, value):
+        """Validate that name is not empty."""
+        if not value or not value.strip():
+            raise serializers.ValidationError("Le nom du magasin est obligatoire.")
+        return value.strip()
+    
+    def validate_address(self, value):
+        """Validate that address is not empty."""
+        if not value or not value.strip():
+            raise serializers.ValidationError("L'adresse du magasin est obligatoire.")
+        return value.strip()
+    
+    def validate_city(self, value):
+        """Validate that city is not empty."""
+        if not value or not value.strip():
+            raise serializers.ValidationError("La ville du magasin est obligatoire.")
+        return value.strip()
+    
+    def validate(self, attrs):
+        """Validate store data."""
+        # Validation supplémentaire si nécessaire
+        return attrs
+    
     def get_stock_value(self, obj):
         """Calculate total stock value."""
         from django.db.models import Sum, F
@@ -374,6 +413,10 @@ class StockMovementSerializer(serializers.ModelSerializer):
 
                 # Attacher le PurchaseOrder au mouvement de stock
                 validated_data['purchase_order'] = po
+                
+                # Utiliser la date de commande comme date du mouvement
+                if 'date' not in validated_data or not validated_data.get('date'):
+                    validated_data['date'] = po.order_date
 
         # Attach created_by if passed from view.perform_create
         created_by = kwargs.get('created_by')
@@ -448,10 +491,10 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransfer
         fields = [
-            'transfer_number', 'reference', 'source_store', 'destination_store', 'transfer_date',
+            'id', 'transfer_number', 'reference', 'source_store', 'destination_store', 'transfer_date',
             'expected_arrival', 'status', 'notes', 'lines'
         ]
-        read_only_fields = ['transfer_number']
+        read_only_fields = ['id', 'transfer_number']
     
     def validate(self, data):
         """Valider que les quantités demandées sont disponibles."""

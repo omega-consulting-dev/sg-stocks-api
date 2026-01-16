@@ -24,10 +24,10 @@ def reset_demo_tenant():
     # Vérifier que le tenant démo existe
     demo = Company.objects.filter(schema_name='demo').first()
     if not demo:
-        print("❌ Le tenant 'demo' n'existe pas!")
+        print("[ERREUR] Le tenant 'demo' n'existe pas!")
         return False
     
-    print(f"🔄 Réinitialisation du tenant: {demo.name}")
+    print(f"[UPDATE] Réinitialisation du tenant: {demo.name}")
     print()
     
     with schema_context('demo'):
@@ -41,7 +41,7 @@ def reset_demo_tenant():
         from apps.accounts.models import UserSession, UserActivity
         
         # Supprimer les transactions
-        print("🗑️  Suppression des données transactionnelles...")
+        print("[SUPPRESSION]  Suppression des données transactionnelles...")
         
         counts = {
             'Ventes': Sale.objects.count(),
@@ -60,13 +60,13 @@ def reset_demo_tenant():
         }
         
         # Afficher avant suppression
-        print("\n   📊 Données à supprimer:")
+        print("\n   [STATS] Données à supprimer:")
         for model_name, count in counts.items():
             if count > 0:
                 print(f"      - {model_name}: {count}")
         
         # Suppression
-        print("\n   🗑️  Suppression en cours...")
+        print("\n   [SUPPRESSION]  Suppression en cours...")
         Sale.objects.all().delete()
         Quote.objects.all().delete()
         Invoice.objects.all().delete()
@@ -83,28 +83,28 @@ def reset_demo_tenant():
         UserSession.objects.all().delete()
         UserActivity.objects.all().delete()
         
-        print("   ✅ Données transactionnelles supprimées")
+        print("   [OK] Données transactionnelles supprimées")
         
         # Réinitialiser les stocks à zéro
-        print("\n   📦 Réinitialisation des stocks...")
+        print("\n   [PACKAGE] Réinitialisation des stocks...")
         Stock.objects.all().update(quantity=0)
-        print("   ✅ Stocks réinitialisés")
+        print("   [OK] Stocks réinitialisés")
         
         # Réinitialiser le mot de passe admin
-        print("\n   🔐 Réinitialisation du mot de passe admin...")
+        print("\n   [LOCK] Réinitialisation du mot de passe admin...")
         from apps.accounts.models import User
         admin = User.objects.filter(email='demo@sgstock.cm').first()
         if admin:
             admin.set_password('demo1234')
             admin.save()
-            print("   ✅ Mot de passe admin réinitialisé")
+            print("   [OK] Mot de passe admin réinitialisé")
         
     print()
     print("="*80)
-    print("✅ TENANT DE DÉMO RÉINITIALISÉ AVEC SUCCÈS!")
+    print("[OK] TENANT DE DÉMO RÉINITIALISÉ AVEC SUCCÈS!")
     print("="*80)
     print()
-    print("💡 Pour repeupler avec des données:")
+    print("[INFO] Pour repeupler avec des données:")
     print("   python populate_demo_data.py")
     print()
     
@@ -114,7 +114,7 @@ if __name__ == '__main__':
     try:
         reset_demo_tenant()
     except Exception as e:
-        print(f"❌ ERREUR: {e}")
+        print(f"[ERREUR] ERREUR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

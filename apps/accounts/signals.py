@@ -76,7 +76,7 @@ def notify_stock_issues(sender, instance, created, **kwargs):
     Le modèle Product n'a pas d'attribut stock_quantity direct.
     Le stock est géré via le modèle Stock (stock par magasin) dans apps.inventory.
     
-    ✅ Le signal de notification de stock est maintenant dans apps/inventory/signals.py
+    [OK] Le signal de notification de stock est maintenant dans apps/inventory/signals.py
        et se déclenche sur le modèle Stock lors des modifications de stock.
     """
     pass

@@ -307,7 +307,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             updated_count = 0
             errors = []
 
-            # 🔥 On garde uniquement un user authentifié avec un ID
+            # [IMPORTANT] On garde uniquement un user authentifié avec un ID
             user_id = request.user.pk if (getattr(request.user, 'is_authenticated', False) and getattr(request.user, 'pk', None)) else None
 
             for index, row in df.iterrows():

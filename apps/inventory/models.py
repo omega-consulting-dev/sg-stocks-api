@@ -298,7 +298,7 @@ class StockTransfer(AuditModel):
         ordering = ['-created_at']
     
     def __str__(self):
-        return f"{self.transfer_number} - {self.source_store} → {self.destination_store}"
+        return f"{self.transfer_number} - {self.source_store} -> {self.destination_store}"
 
 
 class StockTransferLine(TimeStampedModel):

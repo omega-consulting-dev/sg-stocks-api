@@ -28,14 +28,14 @@ class Command(BaseCommand):
         active_movements = StockMovement.objects.filter(is_active=True).count()
         inactive_movements = StockMovement.objects.filter(is_active=False).count()
         
-        self.stdout.write("📊 STATISTIQUES DES MOUVEMENTS:")
+        self.stdout.write("[STATS] STATISTIQUES DES MOUVEMENTS:")
         self.stdout.write(f"   - Total mouvements : {total_movements}")
         self.stdout.write(f"   - Mouvements actifs : {active_movements}")
         self.stdout.write(f"   - Mouvements inactifs (supprimés) : {inactive_movements}")
         
         if inactive_movements > 0:
             self.stdout.write(self.style.WARNING(
-                f"\n⚠️  ATTENTION: {inactive_movements} mouvement(s) ont été supprimé(s)"
+                f"\n[ATTENTION]  ATTENTION: {inactive_movements} mouvement(s) ont été supprimé(s)"
             ))
             self.stdout.write("   Ces mouvements ont été désactivés mais leur impact sur le stock")
             self.stdout.write("   a normalement été annulé lors de la suppression.\n")
@@ -101,7 +101,7 @@ class Command(BaseCommand):
         
         # 3. Afficher les problèmes trouvés
         if issues_found:
-            self.stdout.write(self.style.ERROR(f"❌ {len(issues_found)} INCOHÉRENCE(S) DÉTECTÉE(S):\n"))
+            self.stdout.write(self.style.ERROR(f"[ERREUR] {len(issues_found)} INCOHÉRENCE(S) DÉTECTÉE(S):\n"))
             for i, issue in enumerate(issues_found, 1):
                 self.stdout.write(f"{i}. {issue['product']} - {issue['store']}")
                 self.stdout.write(f"   Stock actuel en BD: {issue['stock_actuel']}")
@@ -111,7 +111,7 @@ class Command(BaseCommand):
                       f"Transferts Out={issue['transferts_out']}, Transferts In={issue['transferts_in']}")
                 self.stdout.write("")
         else:
-            self.stdout.write(self.style.SUCCESS("✅ Aucune incohérence détectée! Tous les stocks sont cohérents.\n"))
+            self.stdout.write(self.style.SUCCESS("[OK] Aucune incohérence détectée! Tous les stocks sont cohérents.\n"))
         
         # 4. Vérifier s'il y a des mouvements avec receipt_number inactifs
         self.stdout.write("\n" + "=" * 80)
@@ -134,16 +134,16 @@ class Command(BaseCommand):
                 total_qty = movements.aggregate(total=Sum('quantity'))['total'] or 0
                 self.stdout.write(f"   - {receipt_num}: {movements.count()} mouvement(s), Total quantité: {total_qty}")
         else:
-            self.stdout.write(self.style.SUCCESS("✅ Aucun bon d'entrée supprimé.\n"))
+            self.stdout.write(self.style.SUCCESS("[OK] Aucun bon d'entrée supprimé.\n"))
         
         # 5. Correction si demandée
         if options['fix'] and issues_found:
             self.fix_issues(issues_found)
         elif options['fix'] and not issues_found:
-            self.stdout.write(self.style.SUCCESS("\n✅ Aucune correction nécessaire - Tous les stocks sont déjà cohérents!\n"))
+            self.stdout.write(self.style.SUCCESS("\n[OK] Aucune correction nécessaire - Tous les stocks sont déjà cohérents!\n"))
         elif issues_found:
             self.stdout.write("\n" + "=" * 80)
-            self.stdout.write(self.style.WARNING("💡 POUR CORRIGER LES INCOHÉRENCES"))
+            self.stdout.write(self.style.WARNING("[INFO] POUR CORRIGER LES INCOHÉRENCES"))
             self.stdout.write("=" * 80)
             self.stdout.write("\nExécutez la commande suivante:")
             self.stdout.write(self.style.SUCCESS("    python manage.py verify_stock --fix"))
@@ -155,7 +155,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING("CORRECTION DES INCOHÉRENCES"))
         self.stdout.write("=" * 80 + "\n")
         
-        self.stdout.write(f"⚠️  Correction de {len(issues)} stock(s)...")
+        self.stdout.write(f"[ATTENTION]  Correction de {len(issues)} stock(s)...")
         self.stdout.write("   Les stocks en base de données seront mis à jour avec les valeurs calculées.\n")
         
         corrected = 0
@@ -179,5 +179,5 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.ERROR(f"✗ Erreur lors de la correction de {issue['product']} - {issue['store']}: {e}\n"))
         
         self.stdout.write("=" * 80)
-        self.stdout.write(self.style.SUCCESS(f"✅ {corrected}/{len(issues)} stock(s) corrigé(s) avec succès!"))
+        self.stdout.write(self.style.SUCCESS(f"[OK] {corrected}/{len(issues)} stock(s) corrigé(s) avec succès!"))
         self.stdout.write("=" * 80 + "\n")

@@ -23,12 +23,12 @@ with schema_context('demo'):
         demo_user.set_password('demo1234')
         demo_user.save()
         
-        print("\n✅ Mot de passe mis à jour avec succès!")
+        print("\n[OK] Mot de passe mis à jour avec succès!")
         print(f"\n📌 Nouvelles informations de connexion:")
         print(f"   Email: demo@sgstock.cm")
         print(f"   Mot de passe: demo1234")
         print(f"\n   Accès: http://demo.localhost:5173")
     else:
-        print("\n❌ Utilisateur démo non trouvé!")
+        print("\n[ERREUR] Utilisateur démo non trouvé!")
 
 print("\n" + "=" * 80)

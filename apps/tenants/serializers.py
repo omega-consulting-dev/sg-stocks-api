@@ -4,6 +4,9 @@ from django.core.management import call_command
 from django.utils import timezone
 from .models import Company, Domain, CompanyBilling, AuditLog, SupportTicket, SystemMetrics
 from apps.accounts.models import User, Role
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DomainSerializer(serializers.ModelSerializer):
     class Meta:
@@ -28,7 +31,7 @@ class CompanySerializer(serializers.ModelSerializer):
             # Usage metrics
             'storage_used_mb', 'total_users_count', 'total_products_count',
             # Settings
-            'currency', 'tax_rate'
+            'currency', 'tax_rate', 'allow_flexible_pricing'
         )
         read_only_fields = ('schema_name', 'created_on')
 
@@ -144,11 +147,19 @@ class TenantProvisioningSerializer(serializers.Serializer):
         
         company = Company.objects.create(**company_data)
 
-        # Domaine associé
-        domain = Domain.objects.create(
+        # Domaines associés
+        # 1. Domaine principal pour la production
+        domain_prod = Domain.objects.create(
             domain=f"{subdomain}.{base_domain}",
             tenant=company,
-            is_primary=True
+            is_primary=False  # Production n'est pas primary en local
+        )
+        
+        # 2. Domaine localhost pour le développement local
+        domain_local = Domain.objects.create(
+            domain=f"{subdomain}.localhost",
+            tenant=company,
+            is_primary=True  # Localhost est primary en local
         )
 
         # Préparer les données admin pour la tâche asynchrone
@@ -160,13 +171,28 @@ class TenantProvisioningSerializer(serializers.Serializer):
             'last_name': validated_data.get("admin_last_name", ''),
         }
 
-        # Lancer le provisioning en arrière-plan (migrations + rôles + admin)
-        provision_tenant_async.delay(company.id, admin_data)
+        # Lancer le provisioning en arrière-plan si Celery est disponible
+        try:
+            # Tenter d'utiliser Celery (asynchrone)
+            provision_tenant_async.delay(company.id, admin_data)
+            provisioning_status = "pending"
+            logger.info(f"[OK] Provisioning lancé en arrière-plan via Celery pour {company.name}")
+        except Exception as e:
+            # Si Celery/Redis n'est pas disponible, exécuter de manière synchrone
+            logger.warning(f"[ATTENTION] Celery non disponible ({e}), provisioning synchrone...")
+            try:
+                provision_tenant_async(company.id, admin_data)
+                provisioning_status = "completed"
+                logger.info(f"[OK] Provisioning synchrone terminé pour {company.name}")
+            except Exception as sync_error:
+                logger.error(f"[ERREUR] Erreur lors du provisioning synchrone: {sync_error}")
+                provisioning_status = "failed"
 
         return {
             "company": company,
-            "domain": domain,
-            "provisioning_status": "pending"
+            "domain": domain_prod,
+            "domain_local": domain_local,
+            "provisioning_status": provisioning_status
         }
 
 

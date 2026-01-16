@@ -58,7 +58,7 @@ def current_tenant(request):
         
         elif request.method == 'PATCH':
             # Seuls certains champs peuvent être modifiés
-            allowed_fields = ['name', 'email', 'phone', 'address']
+            allowed_fields = ['name', 'email', 'phone', 'address', 'allow_flexible_pricing']
             update_data = {k: v for k, v in request.data.items() if k in allowed_fields}
             
             serializer = CompanySerializer(tenant, data=update_data, partial=True)

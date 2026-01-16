@@ -23,7 +23,7 @@ class Command(BaseCommand):
         
         if not schema_name:
             self.stdout.write(self.style.ERROR(
-                "❌ Erreur: Vous devez spécifier le schema du tenant avec --schema=<nom_schema>"
+                "[ERREUR] Erreur: Vous devez spécifier le schema du tenant avec --schema=<nom_schema>"
             ))
             self.stdout.write("\nExemple: python manage.py reset_inventory --schema=tenant1")
             return
@@ -44,7 +44,7 @@ class Command(BaseCommand):
         self.stdout.write("=" * 70)
         
         # Compter les données
-        self.stdout.write("\n📊 DONNÉES ACTUELLES:")
+        self.stdout.write("\n[STATS] DONNÉES ACTUELLES:")
         self.stdout.write(f"   - Mouvements de stock: {StockMovement.objects.count()}")
         self.stdout.write(f"   - Stocks: {Stock.objects.count()}")
         self.stdout.write(f"   - Transferts: {StockTransfer.objects.count()}")
@@ -56,13 +56,13 @@ class Command(BaseCommand):
         self.stdout.write(f"   - Bons de commande: {PurchaseOrder.objects.count()}")
         
         # Confirmation
-        confirmation = input("\n⚠️  VOULEZ-VOUS VRAIMENT SUPPRIMER CES DONNÉES? (tapez 'OUI' pour confirmer): ")
+        confirmation = input("\n[ATTENTION]  VOULEZ-VOUS VRAIMENT SUPPRIMER CES DONNÉES? (tapez 'OUI' pour confirmer): ")
         
         if confirmation != 'OUI':
-            self.stdout.write(self.style.ERROR("\n❌ Opération annulée."))
+            self.stdout.write(self.style.ERROR("\n[ERREUR] Opération annulée."))
             return
         
-        self.stdout.write("\n🔄 Suppression en cours...\n")
+        self.stdout.write("\n[UPDATE] Suppression en cours...\n")
         
         # Supprimer dans l'ordre pour respecter les contraintes
         
@@ -101,7 +101,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"✓ {count} bons de commande supprimés"))
         
         self.stdout.write("\n" + "=" * 70)
-        self.stdout.write(self.style.SUCCESS("✅ TOUTES LES DONNÉES ONT ÉTÉ SUPPRIMÉES AVEC SUCCÈS!"))
+        self.stdout.write(self.style.SUCCESS("[OK] TOUTES LES DONNÉES ONT ÉTÉ SUPPRIMÉES AVEC SUCCÈS!"))
         self.stdout.write("=" * 70)
         self.stdout.write("\n📋 Vous pouvez maintenant recommencer vos tests.")
         self.stdout.write("   Les produits, fournisseurs, clients et magasins sont conservés.\n")

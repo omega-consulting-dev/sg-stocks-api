@@ -27,7 +27,7 @@ with schema_context(TENANT_SCHEMA):
     # Trouver tous les transferts reçus sans mouvement 'transfer' associé
     transferred = StockTransfer.objects.filter(status__in=['in_transit', 'received'])
     
-    print(f"\n📊 Transferts trouvés: {transferred.count()}")
+    print(f"\n[STATS] Transferts trouvés: {transferred.count()}")
     
     created_count = 0
     
@@ -59,6 +59,6 @@ with schema_context(TENANT_SCHEMA):
                 created_count += 1
                 print(f"✓ Transfert {transfer.transfer_number} - Mouvement 'transfer' créé pour {line.product.name} (Qté: {quantity})")
     
-    print(f"\n✅ Total mouvements 'transfer' créés: {created_count}")
+    print(f"\n[OK] Total mouvements 'transfer' créés: {created_count}")
 
 print("\n" + "=" * 60)

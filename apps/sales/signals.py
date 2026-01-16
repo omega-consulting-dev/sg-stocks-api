@@ -15,12 +15,16 @@ def auto_generate_invoice_on_confirmation(sender, instance, created, **kwargs):
     logger = logging.getLogger(__name__)
     logger.info(f"Signal triggered for sale {instance.id}, created={created}, status={instance.status}")
     
-    if not created and instance.status == 'confirmed':
-        # Check if invoice doesn't already exist
+    if not created and instance.status in ['confirmed', 'completed']:
+        # Check if invoice already exists
         try:
             # Try to access the invoice relation
             existing_invoice = instance.invoice
-            logger.info(f"Sale {instance.id} already has invoice {existing_invoice.id}")
+            logger.info(f"Sale {instance.id} already has invoice {existing_invoice.id} - Updating it")
+            # Update existing invoice with new sale data
+            from apps.invoicing.models import Invoice
+            Invoice.update_from_sale(existing_invoice, instance)
+            logger.info(f"Invoice {existing_invoice.id} updated successfully")
             return
         except Exception:
             # Invoice doesn't exist, create it

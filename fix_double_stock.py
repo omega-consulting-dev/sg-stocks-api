@@ -24,10 +24,10 @@ with schema_context('agribio'):
         stock.quantity = new_qty
         stock.save()
         
-        print(f"\n✅ {stock.product.name} ({stock.store.name})")
+        print(f"\n[OK] {stock.product.name} ({stock.store.name})")
         print(f"   Ancienne quantité: {old_qty}")
         print(f"   Nouvelle quantité: {new_qty}")
     
     print("\n" + "=" * 80)
-    print("✅ CORRECTION TERMINÉE")
+    print("[OK] CORRECTION TERMINÉE")
     print("=" * 80)

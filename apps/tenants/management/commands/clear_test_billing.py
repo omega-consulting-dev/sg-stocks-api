@@ -18,18 +18,18 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not options['confirm']:
             self.stdout.write(
-                self.style.WARNING('⚠️  Cette commande supprimera TOUTES les factures.')
+                self.style.WARNING('[ATTENTION]  Cette commande supprimera TOUTES les factures.')
             )
             self.stdout.write(
                 self.style.WARNING('Pour confirmer, utilisez: python manage.py clear_test_billing --confirm')
             )
             return
         
-        self.stdout.write('🗑️  Suppression des factures de test...\n')
+        self.stdout.write('[SUPPRESSION]  Suppression des factures de test...\n')
         
         count = CompanyBilling.objects.count()
         CompanyBilling.objects.all().delete()
         
         self.stdout.write(
-            self.style.SUCCESS(f'✅ {count} facture(s) supprimée(s)')
+            self.style.SUCCESS(f'[OK] {count} facture(s) supprimée(s)')
         )

@@ -26,22 +26,22 @@ def create_demo_tenant():
     demo = Company.objects.filter(schema_name='demo').first()
     
     if demo:
-        print("⚠️  Le tenant 'demo' existe déjà!")
+        print("[ATTENTION]  Le tenant 'demo' existe déjà!")
         print(f"   Nom: {demo.name}")
         print(f"   Email: {demo.email}")
         print()
         choice = input("Voulez-vous le supprimer et le recréer? (o/N): ").strip().lower()
         if choice != 'o':
-            print("❌ Opération annulée")
+            print("[ERREUR] Opération annulée")
             return False
         
-        print("🗑️  Suppression de l'ancien tenant démo...")
+        print("[SUPPRESSION]  Suppression de l'ancien tenant démo...")
         demo.delete()
-        print("✅ Ancien tenant supprimé")
+        print("[OK] Ancien tenant supprimé")
         print()
     
     # Créer le nouveau tenant
-    print("📝 Création du tenant 'demo'...")
+    print("[NOTE] Création du tenant 'demo'...")
     demo = Company.objects.create(
         schema_name='demo',
         name='Démo SG-Stock',
@@ -72,7 +72,7 @@ def create_demo_tenant():
         currency='XAF',
         tax_rate=Decimal('19.25')
     )
-    print(f"✅ Tenant créé: {demo.name}")
+    print(f"[OK] Tenant créé: {demo.name}")
     print()
     
     # Créer les domaines
@@ -84,7 +84,7 @@ def create_demo_tenant():
         tenant=demo,
         is_primary=True
     )
-    print("   ✅ demo.localhost")
+    print("   [OK] demo.localhost")
     
     # Domaine production (à adapter selon votre domaine)
     # Domain.objects.create(
@@ -92,7 +92,7 @@ def create_demo_tenant():
     #     tenant=demo,
     #     is_primary=False
     # )
-    # print("   ✅ demo.sgstock.cm")
+    # print("   [OK] demo.sgstock.cm")
     
     print()
     
@@ -133,7 +133,7 @@ def create_demo_tenant():
             admin_user = User.objects.get(email='demo@sgstock.cm')
             admin_user.set_password('demo1234')
             admin_user.save()
-            print("   ✅ Utilisateur démo mis à jour")
+            print("   [OK] Utilisateur démo mis à jour")
         else:
             admin_user = User.objects.create_user(
                 username='demo',
@@ -146,11 +146,11 @@ def create_demo_tenant():
                 is_staff=False,
                 is_superuser=False
             )
-            print("   ✅ Utilisateur démo créé")
+            print("   [OK] Utilisateur démo créé")
     
     print()
     print("="*80)
-    print("✅ TENANT DE DÉMO CRÉÉ AVEC SUCCÈS!")
+    print("[OK] TENANT DE DÉMO CRÉÉ AVEC SUCCÈS!")
     print("="*80)
     print()
     print("📋 INFORMATIONS DE CONNEXION:")
@@ -158,7 +158,7 @@ def create_demo_tenant():
     print(f"   Email    : demo@sgstock.cm")
     print(f"   Password : demo1234")
     print()
-    print("⚠️  IMPORTANT:")
+    print("[ATTENTION]  IMPORTANT:")
     print("   - Ce tenant est partagé par tous les utilisateurs de la démo")
     print("   - Les données seront réinitialisées quotidiennement (script à configurer)")
     print("   - Utilisez 'python populate_demo_data.py' pour ajouter des données")
@@ -170,7 +170,7 @@ if __name__ == '__main__':
     try:
         create_demo_tenant()
     except Exception as e:
-        print(f"❌ ERREUR: {e}")
+        print(f"[ERREUR] ERREUR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

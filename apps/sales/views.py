@@ -37,8 +37,8 @@ class SaleViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['customer', 'store', 'status', 'payment_status', 'sale_date']
     search_fields = ['sale_number', 'customer__username']
-    ordering_fields = ['sale_date', 'total_amount', 'created_at']
-    ordering = ['sale_date']
+    ordering_fields = ['sale_date', 'total_amount', 'created_at', 'sale_number']
+    ordering = ['sale_number']  # Tri par numéro de vente (VTE2026000001, VTE2026000002, etc.)
     
     def get_queryset(self):
         """
@@ -76,7 +76,7 @@ class SaleViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return SaleListSerializer
-        elif self.action == 'create' or self.action == 'update':
+        elif self.action in ['create', 'update', 'partial_update']:
             return SaleCreateSerializer
         return SaleDetailSerializer
     
@@ -94,6 +94,22 @@ class SaleViewSet(viewsets.ModelViewSet):
         detail_serializer = SaleDetailSerializer(instance)
         headers = self.get_success_headers(detail_serializer.data)
         return Response(detail_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
+    def update(self, request, *args, **kwargs):
+        """Override update to use SaleCreateSerializer and return detail."""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        # Use detail serializer for response
+        detail_serializer = SaleDetailSerializer(serializer.instance)
+        return Response(detail_serializer.data)
+    
+    def perform_update(self, serializer):
+        """Save updated instance."""
+        serializer.save(updated_by=self.request.user)
     
     @extend_schema(summary="Confirmer une vente et décrémenter le stock", tags=["Sales"])
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])

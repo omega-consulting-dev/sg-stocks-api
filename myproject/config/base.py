@@ -75,8 +75,11 @@ EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='services@sg-stocks.com')
 
+# Emails pour les notifications admin (messages de contact)
+ADMIN_NOTIFICATION_EMAILS = env.list('ADMIN_NOTIFICATION_EMAILS', default=['admin@localhost'])
+
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("SIMPLE_JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=30))),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=int(env("SIMPLE_JWT_ACCESS_TOKEN_LIFETIME_MINUTES", default=1440))),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=int(env("SIMPLE_JWT_REFRESH_TOKEN_LIFETIME_DAYS", default=7))),
     # 'ROTATE_REFRESH_TOKENS': True,
     # 'BLACKLIST_AFTER_ROTATION': True,
@@ -188,7 +191,7 @@ SHARED_APPS = (
 
     # Apps locales partagées
     'apps.main',
-    'core',
+    # Note: 'core' est maintenant dans TENANT_APPS pour que chaque tenant ait ses propres configurations
 )
 
 TENANT_APPS = (
@@ -199,6 +202,9 @@ TENANT_APPS = (
 
     # Apps locales (accounts doit être ici car il a des relations vers inventory)
     'apps.accounts',  # Contient des relations vers inventory.Store
+    
+    # Core app pour configurations tenant-specific
+    'core',  # Notifications et configurations de champs par tenant
     
     # Apps externes (guardian dépend de auth)
     'guardian',

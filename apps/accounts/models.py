@@ -378,10 +378,7 @@ class User(AbstractUser, TimeStampedModel):
             from apps.inventory.models import Store
             return Store.objects.all()
         
-        # TEMPORAIRE: assigned_stores commenté
-        from apps.inventory.models import Store
-        return Store.objects.none()
-        # return self.assigned_stores.all()
+        return self.assigned_stores.all()
     
     def get_display_name(self):
         """Get the best display name for this user."""
@@ -397,9 +394,7 @@ class User(AbstractUser, TimeStampedModel):
         if self.role and self.role.access_scope == 'all':
             return True
         
-        # TEMPORAIRE: assigned_stores commenté
-        return False
-        # return self.assigned_stores.filter(id=store.id).exists()
+        return self.assigned_stores.filter(id=store.id).exists()
     
     def get_default_store(self):
         """
@@ -411,18 +406,14 @@ class User(AbstractUser, TimeStampedModel):
         if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
             return None
         
-        # TEMPORAIRE: assigned_stores commenté
-        return None
         # Pour les autres rôles, retourner le premier magasin assigné
-        # return self.assigned_stores.first()
+        return self.assigned_stores.first()
     
     def has_assigned_stores(self):
         """Check if user has assigned stores (not admin/superadmin)."""
         if self.is_superuser or (self.role and self.role.name in ['super_admin', 'admin']):
             return False
-        # TEMPORAIRE: assigned_stores commenté
-        return False
-        # return self.assigned_stores.exists()
+        return self.assigned_stores.exists()
     
     def is_store_restricted(self):
         """
@@ -437,7 +428,6 @@ class User(AbstractUser, TimeStampedModel):
             return False
         
         return True
-        return self.assigned_stores.filter(id=store.id).exists()
 
 
 class Permission(TimeStampedModel):

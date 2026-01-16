@@ -9,6 +9,9 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from apps.accounts.models import User, Role, Permission, UserSession, UserActivity
 from django.db.models import Sum
 from apps.suppliers.models import Supplier, SupplierPayment
+import logging
+
+logger = logging.getLogger(__name__)
 ### auth   
 class LoginSerializer(TokenObtainPairSerializer):
     username_field = 'email'
@@ -21,7 +24,30 @@ class LoginSerializer(TokenObtainPairSerializer):
             user = authenticate(request=self.context.get('request'), email=email, password=password)
 
             if not user:
-                raise serializers.ValidationError({"login_error": "Email ou mot de passe incorrect."})
+                raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
+            
+            # Vérifier si l'entreprise est suspendue
+            from django.db import connection
+            
+            try:
+                tenant = connection.tenant
+                logger.info(f"Verification suspension pour tenant: {tenant.schema_name if tenant else 'None'}")
+                
+                if tenant and hasattr(tenant, 'is_suspended'):
+                    logger.info(f"   is_suspended = {tenant.is_suspended}")
+                    
+                    if tenant.is_suspended:
+                        reason = tenant.suspension_reason or "Votre compte a été suspendu."
+                        logger.warning(f"Tentative de connexion refusee - Compte suspendu: {tenant.schema_name}")
+                        raise serializers.ValidationError({
+                            "detail": f"Accès refusé - Compte suspendu. {reason} Contactez l'administrateur pour plus d'informations."
+                        })
+                else:
+                    logger.info(f"   Pas de vérification de suspension (schema public ou tenant sans is_suspended)")
+            except AttributeError:
+                # Pas de tenant (schéma public probablement)
+                logger.info("   Pas de tenant disponible (schema public)")
+                pass
 
         else:
             raise serializers.ValidationError('Email et mot de passe sont requis.')
@@ -171,7 +197,7 @@ class UserDetailSerializer(serializers.ModelSerializer):
             
             # Employee
             'employee_id', 'role', 'role_name',
-            'secondary_roles', 'secondary_roles_list',  # 'assigned_stores' commenté temporairement
+            'secondary_roles', 'secondary_roles_list', 'assigned_stores',
             'assigned_stores_list', 'default_store', 'has_assigned_stores', 
             'is_store_restricted', 'hire_date', 'termination_date',
             
@@ -185,10 +211,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['date_joined', 'last_login', 'created_at', 'updated_at']
     
     def get_assigned_stores_list(self, obj):
-        # TEMPORAIRE: assigned_stores commenté
-        return []
-        # from apps.inventory.serializers import StoreMinimalSerializer
-        # return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
+        from apps.inventory.serializers import StoreMinimalSerializer
+        return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
     
     def get_default_store(self, obj):
         """Return default store ID for store-restricted users."""
@@ -222,7 +246,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             
             # Employee
             'employee_id', 'role', 'secondary_roles',
-            # 'assigned_stores',  # COMMENTÉ temporairement
+            'assigned_stores',
             'hire_date',
             
             # Contact d'urgence
@@ -252,7 +276,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         validated_data.pop('password_confirm')
         password = validated_data.pop('password')
         secondary_roles = validated_data.pop('secondary_roles', [])
-        # assigned_stores = validated_data.pop('assigned_stores', [])  # COMMENTÉ temporairement
+        assigned_stores = validated_data.pop('assigned_stores', [])
         
         user = User.objects.create_user(**validated_data)
         user.set_password(password)
@@ -261,6 +285,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
         # Ajouter les rôles secondaires
         if secondary_roles:
             user.secondary_roles.set(secondary_roles)
+        
+        # Assigner les magasins
+        if assigned_stores:
+            user.assigned_stores.set(assigned_stores)
         
         # Assigner les magasins - COMMENTÉ temporairement
         # if assigned_stores:

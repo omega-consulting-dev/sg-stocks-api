@@ -29,7 +29,7 @@ if tenant:
             print(f"Username     : {user.username}")
             print(f"Nouveau MDP  : {new_password}")
             print("=" * 60)
-            print("\n⚠️  Changez ce mot de passe après la première connexion")
+            print("\n[ATTENTION]  Changez ce mot de passe après la première connexion")
         else:
             print("Utilisateur admin@agribio.com non trouvé")
 else:

@@ -25,7 +25,7 @@ def populate_demo_data():
     # Vérifier que le tenant démo existe
     demo = Company.objects.filter(schema_name='demo').first()
     if not demo:
-        print("❌ Le tenant 'demo' n'existe pas!")
+        print("[ERREUR] Le tenant 'demo' n'existe pas!")
         print("   Exécutez d'abord: python create_demo_tenant.py")
         return False
     
@@ -49,7 +49,7 @@ def populate_demo_data():
                 defaults=store_data
             )
             stores.append(store)
-            status = "✅ Créé" if created else "♻️  Existe déjà"
+            status = "[OK] Créé" if created else "♻️  Existe déjà"
             print(f"   {status}: {store.name}")
         
         print()
@@ -58,11 +58,11 @@ def populate_demo_data():
             name='Produits Divers',
             defaults={'description': 'Catégorie par défaut pour les produits de démo'}
         )
-        status = "✅ Créée" if created else "♻️  Existe déjà"
+        status = "[OK] Créée" if created else "♻️  Existe déjà"
         print(f"   {status}: {default_category.name}")
         
         print()
-        print("📦 Création des produits...")
+        print("[PACKAGE] Création des produits...")
         products_data = [
             {'name': 'iPhone 15 Pro', 'cost': 450000, 'price': 550000, 'ref': 'PROD-001'},
             {'name': 'Samsung Galaxy S24', 'cost': 380000, 'price': 480000, 'ref': 'PROD-002'},
@@ -95,7 +95,7 @@ def populate_demo_data():
                 }
             )
             products.append(product)
-            status = "✅ Créé" if created else "♻️  Existe déjà"
+            status = "[OK] Créé" if created else "♻️  Existe déjà"
             print(f"   {status}: {product.name} ({product.reference})")
         
         print()
@@ -111,7 +111,7 @@ def populate_demo_data():
                 customer_code=cust_data['customer_code'],
                 defaults=cust_data
             )
-            status = "✅ Créé" if created else "♻️  Existe déjà"
+            status = "[OK] Créé" if created else "♻️  Existe déjà"
             print(f"   {status}: {customer.name}")
         
         print()
@@ -127,16 +127,16 @@ def populate_demo_data():
                 supplier_code=supp_data['supplier_code'],
                 defaults=supp_data
             )
-            status = "✅ Créé" if created else "♻️  Existe déjà"
+            status = "[OK] Créé" if created else "♻️  Existe déjà"
             print(f"   {status}: {supplier.name}")
         
         print()
         print("="*80)
-        print("✅ DONNÉES DE DÉMO CRÉÉES AVEC SUCCÈS!")
+        print("[OK] DONNÉES DE DÉMO CRÉÉES AVEC SUCCÈS!")
         print("="*80)
         print()
-        print(f"   📊 Magasins    : {Store.objects.count()}")
-        print(f"   📦 Produits    : {Product.objects.count()}")
+        print(f"   [STATS] Magasins    : {Store.objects.count()}")
+        print(f"   [PACKAGE] Produits    : {Product.objects.count()}")
         print(f"   👥 Clients     : {Customer.objects.count()}")
         print(f"   🏭 Fournisseurs: {Supplier.objects.count()}")
         print()
@@ -147,7 +147,7 @@ if __name__ == '__main__':
     try:
         populate_demo_data()
     except Exception as e:
-        print(f"❌ ERREUR: {e}")
+        print(f"[ERREUR] ERREUR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

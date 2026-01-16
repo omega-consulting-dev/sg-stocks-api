@@ -44,7 +44,7 @@ class Command(BaseCommand):
             
             if CompanyBilling.objects.filter(invoice_number=invoice_number).exists():
                 self.stdout.write(
-                    self.style.WARNING(f'⏭️  Facture déjà existante pour {company.name} ({invoice_number})')
+                    self.style.WARNING(f'[SKIP]  Facture déjà existante pour {company.name} ({invoice_number})')
                 )
                 skipped_count += 1
                 continue
@@ -68,13 +68,13 @@ class Command(BaseCommand):
             )
             
             self.stdout.write(
-                self.style.SUCCESS(f'✅ Facture créée: {billing.invoice_number} - {company.name} - {total_amount} XAF')
+                self.style.SUCCESS(f'[OK] Facture créée: {billing.invoice_number} - {company.name} - {total_amount} XAF')
             )
             created_count += 1
         
         # Résumé
         self.stdout.write('\n' + '='*60)
-        self.stdout.write(self.style.SUCCESS(f'✅ {created_count} facture(s) créée(s)'))
-        self.stdout.write(self.style.WARNING(f'⏭️  {skipped_count} facture(s) déjà existante(s)'))
+        self.stdout.write(self.style.SUCCESS(f'[OK] {created_count} facture(s) créée(s)'))
+        self.stdout.write(self.style.WARNING(f'[SKIP]  {skipped_count} facture(s) déjà existante(s)'))
         self.stdout.write(f'📅 Mois facturé: {invoice_date.strftime("%B %Y")}')
         self.stdout.write('='*60)

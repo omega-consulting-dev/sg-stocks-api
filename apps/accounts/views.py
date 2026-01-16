@@ -73,7 +73,7 @@ class UserViewSet(viewsets.ModelViewSet):
     """
     
     queryset = User.objects.select_related('role').prefetch_related(
-        'secondary_roles'  # 'assigned_stores' commenté temporairement
+        'secondary_roles', 'assigned_stores'
     )
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]

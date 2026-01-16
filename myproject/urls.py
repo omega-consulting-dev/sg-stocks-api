@@ -10,7 +10,7 @@ urlpatterns = [
     # API v1
     path('api/v1/auth/', include('apps.accounts.urls')),
     path('api/v1/main/', include('apps.main.urls')),
-    path('api/v1/notifications/', include('core.urls')),
+    path('api/v1/core/', include('core.urls')),  # Core (notifications, field configs)
     path('api/v1/tenants/', include('apps.tenants.urls')),
     path('api/v1/products/', include('apps.products.urls')),
     path('api/v1/services/', include('apps.services.urls')),

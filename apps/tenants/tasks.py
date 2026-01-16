@@ -28,12 +28,12 @@ def provision_tenant_async(self, company_id, admin_data):
         company = Company.objects.get(id=company_id)
         schema_name = company.schema_name
         
-        logger.info(f"🚀 Début du provisioning asynchrone pour {company.name} (schema: {schema_name})")
+        logger.info(f"[DEBUT] Début du provisioning asynchrone pour {company.name} (schema: {schema_name})")
         
         # Étape 1: Migrations du schéma (la partie la plus longue)
         logger.info(f"⏳ Migration du schéma {schema_name}...")
         call_command('migrate_schemas', schema_name=schema_name, verbosity=0)
-        logger.info(f"✅ Migrations terminées pour {schema_name}")
+        logger.info(f"[OK] Migrations terminées pour {schema_name}")
         
         # Étape 2: Création des rôles dans le schéma du tenant
         connection.set_tenant(company)
@@ -83,7 +83,7 @@ def provision_tenant_async(self, company_id, admin_data):
             }
         )
         
-        logger.info(f"✅ Rôles créés")
+        logger.info(f"[OK] Rôles créés")
         
         # Étape 3: Création de l'utilisateur administrateur
         logger.info(f"👤 Création de l'utilisateur admin...")
@@ -99,14 +99,14 @@ def provision_tenant_async(self, company_id, admin_data):
             role=super_admin_role,
         )
         
-        logger.info(f"✅ Utilisateur admin créé: {admin_user.username}")
+        logger.info(f"[OK] Utilisateur admin créé: {admin_user.username}")
         
         # Mettre à jour le statut du tenant
         company.is_active = True
         company.provisioning_status = 'completed'
         company.save(update_fields=['is_active', 'provisioning_status'])
         
-        logger.info(f"🎉 Provisioning terminé avec succès pour {company.name}")
+        logger.info(f"[SUCCES] Provisioning terminé avec succès pour {company.name}")
         
         return {
             'status': 'success',
@@ -115,7 +115,7 @@ def provision_tenant_async(self, company_id, admin_data):
         }
         
     except Exception as exc:
-        logger.error(f"❌ Erreur lors du provisioning de {company_id}: {str(exc)}")
+        logger.error(f"[ERREUR] Erreur lors du provisioning de {company_id}: {str(exc)}")
         
         # Mettre à jour le statut d'erreur
         try:

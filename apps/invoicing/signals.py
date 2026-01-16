@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from apps.invoicing.models import InvoicePayment
+from apps.invoicing.models import InvoicePayment, Invoice, create_stock_movements_from_invoice
 
 
 @receiver(post_save, sender=InvoicePayment)
@@ -62,3 +62,16 @@ def update_invoice_paid_amount_on_payment_delete(sender, instance, **kwargs):
             invoice.status = 'draft'
             
         invoice.save(update_fields=['paid_amount', 'status'])
+
+
+@receiver(post_save, sender=Invoice)
+def create_invoice_stock_movements(sender, instance, created, **kwargs):
+    """
+    Créer automatiquement les mouvements de stock quand une facture est créée.
+    """
+    if kwargs.get('raw', False):
+        return
+    
+    # Appeler la fonction qui crée les mouvements de stock
+    if created:
+        create_stock_movements_from_invoice(sender=sender, instance=instance, created=created)

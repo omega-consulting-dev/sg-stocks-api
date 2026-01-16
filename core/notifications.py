@@ -166,7 +166,7 @@ def notify_transfer_received(user, transfer_id, transfer_number, from_warehouse,
     return create_notification(
         user=user,
         notification_type='transfer_received',
-        title='📦 Transfert de stock reçu',
+        title='[PACKAGE] Transfert de stock reçu',
         message=f'Transfert {transfer_number} reçu : {total_items} article(s) transféré(s) de "{from_warehouse}" vers "{to_warehouse}".',
         priority='medium',
         data={

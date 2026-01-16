@@ -21,7 +21,7 @@ with schema_context('public'):
             first_name='Admin',
             last_name='System'
         )
-        print(f'✅ Super admin créé avec succès!')
+        print(f'[OK] Super admin créé avec succès!')
     else:
         user = User.objects.get(email=email)
         user.set_password(password)
@@ -29,7 +29,7 @@ with schema_context('public'):
         user.is_superuser = True
         user.is_active = True
         user.save()
-        print(f'✅ Mot de passe réinitialisé avec succès!')
+        print(f'[OK] Mot de passe réinitialisé avec succès!')
     
     print()
     print('📋 IDENTIFIANTS DE CONNEXION:')

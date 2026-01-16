@@ -27,17 +27,17 @@ def create_scheduled_task():
     
     # Vérifier que le script existe
     if not RESET_SCRIPT.exists():
-        print(f"\n❌ Script non trouvé: {RESET_SCRIPT}")
+        print(f"\n[ERREUR] Script non trouvé: {RESET_SCRIPT}")
         return False
     
     # Vérifier que Python existe
     if not PYTHON_EXE.exists():
-        print(f"\n❌ Python non trouvé: {PYTHON_EXE}")
+        print(f"\n[ERREUR] Python non trouvé: {PYTHON_EXE}")
         print("   Utilisez le chemin complet de votre environnement virtuel")
         return False
     
-    print(f"\n✅ Script trouvé: {RESET_SCRIPT}")
-    print(f"✅ Python trouvé: {PYTHON_EXE}")
+    print(f"\n[OK] Script trouvé: {RESET_SCRIPT}")
+    print(f"[OK] Python trouvé: {PYTHON_EXE}")
     
     # Commande pour créer la tâche planifiée
     task_command = f'"{PYTHON_EXE}" "{RESET_SCRIPT}"'
@@ -65,7 +65,7 @@ def create_scheduled_task():
         '/RL', 'HIGHEST',  # Exécuter avec les privilèges les plus élevés
     ]
     
-    print(f"\n📝 Création de la tâche planifiée...")
+    print(f"\n[NOTE] Création de la tâche planifiée...")
     print(f"   Nom: {TASK_NAME}")
     print(f"   Fréquence: Quotidienne")
     print(f"   Heure: {TASK_TIME}")
@@ -74,12 +74,12 @@ def create_scheduled_task():
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode == 0:
-        print("\n✅ Tâche planifiée créée avec succès!")
+        print("\n[OK] Tâche planifiée créée avec succès!")
         print("\n📌 La tâche sera exécutée tous les jours à 3h du matin")
         print("   Elle réinitialisera les données du tenant de démo")
         
         # Afficher comment voir/gérer la tâche
-        print("\n💡 Pour gérer la tâche:")
+        print("\n[INFO] Pour gérer la tâche:")
         print("   1. Ouvrez le Planificateur de tâches Windows (taskschd.msc)")
         print("   2. Cherchez la tâche 'SG-Stock Demo Reset'")
         print("   3. Vous pouvez l'exécuter manuellement, la modifier ou la supprimer")
@@ -88,15 +88,15 @@ def create_scheduled_task():
         print("\n❓ Voulez-vous exécuter la tâche maintenant pour tester? (o/n)")
         response = input().lower()
         if response == 'o':
-            print("\n🔄 Exécution de la tâche...")
+            print("\n[UPDATE] Exécution de la tâche...")
             subprocess.run(['schtasks', '/Run', '/TN', TASK_NAME])
-            print("✅ Tâche lancée! Vérifiez les résultats dans quelques secondes.")
+            print("[OK] Tâche lancée! Vérifiez les résultats dans quelques secondes.")
         
         return True
     else:
-        print(f"\n❌ Erreur lors de la création de la tâche:")
+        print(f"\n[ERREUR] Erreur lors de la création de la tâche:")
         print(result.stderr)
-        print("\n💡 Assurez-vous d'exécuter ce script en tant qu'administrateur")
+        print("\n[INFO] Assurez-vous d'exécuter ce script en tant qu'administrateur")
         return False
 
 def show_alternative_methods():

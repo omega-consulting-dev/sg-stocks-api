@@ -228,6 +228,74 @@ class Invoice(AuditModel):
                 discount_percentage=sale_line.discount_percentage
             )
         
+        # Créer les mouvements de stock pour cette facture
+        # Cela diminuera le stock automatiquement
+        create_stock_movements_from_invoice(sender=cls, instance=invoice, created=True)
+        
+        return invoice
+    
+    @classmethod
+    def update_from_sale(cls, invoice, sale):
+        """Update an existing invoice from a modified sale."""
+        from datetime import timedelta
+        
+        # Calculate due date based on payment term
+        payment_term_days = {
+            'immediate': 0,
+            '15_days': 15,
+            '30_days': 30,
+            '60_days': 60
+        }
+        due_days = payment_term_days.get(sale.payment_term, 30) if hasattr(sale, 'payment_term') else 30
+        due_date = sale.sale_date + timedelta(days=due_days)
+        
+        # Update invoice fields
+        invoice.customer = sale.customer
+        invoice.store = sale.store
+        invoice.invoice_date = sale.sale_date
+        invoice.due_date = due_date
+        invoice.subtotal = sale.subtotal
+        invoice.discount_amount = sale.discount_amount
+        invoice.tax_amount = sale.tax_amount
+        invoice.total_amount = sale.total_amount
+        invoice.paid_amount = sale.paid_amount
+        invoice.notes = sale.notes
+        invoice.save()
+        
+        # Delete existing invoice lines and recreate from sale lines
+        invoice.lines.all().delete()
+        
+        # Supprimer TOUS les anciens mouvements de stock pour cette vente/facture
+        from apps.inventory.models import StockMovement, Stock
+        
+        # Récupérer les anciens mouvements de stock pour cette facture et la vente
+        old_movements = StockMovement.objects.filter(
+            reference__in=[f"FACT-{invoice.invoice_number}", f"VENTE-{sale.sale_number}"]
+        )
+        
+        # Supprimer les anciens mouvements
+        # IMPORTANT: Ne PAS restaurer manuellement le stock avant la suppression !
+        # Le signal post_delete de StockMovement s'en charge automatiquement
+        old_movements.delete()
+        
+        # Copy sale lines to invoice lines
+        for sale_line in sale.lines.all():
+            InvoiceLine.objects.create(
+                invoice=invoice,
+                product=sale_line.product,
+                service=sale_line.service,
+                description=sale_line.description or (
+                    sale_line.product.name if sale_line.product else sale_line.service.name
+                ),
+                quantity=sale_line.quantity,
+                unit_price=sale_line.unit_price,
+                tax_rate=sale_line.tax_rate,
+                discount_percentage=sale_line.discount_percentage
+            )
+        
+        # Créer les nouveaux mouvements de stock ET décrémenter le stock avec les nouvelles quantités
+        create_stock_movements_from_invoice(sender=cls, instance=invoice, created=False)
+        
         return invoice
 
 
@@ -383,27 +451,26 @@ class InvoicePayment(AuditModel):
 def create_stock_movements_from_invoice(sender, instance, created, **kwargs):
     """
     Créer automatiquement les mouvements de stock quand une facture est créée.
-    - Caissier crée facture → mouvement de sortie automatique
+    - Caissier crée facture -> mouvement de sortie automatique
     - Sécurise les données : vérifie stock disponible, enregistre traçabilité complète
     """
-    # Éviter les boucles infinies et traiter uniquement les factures confirmées
+    # Éviter les boucles infinies
     if kwargs.get('raw', False):
         return
     
-    # Créer mouvements dès la création de la facture (pas uniquement quand envoyée/payée)
-    # Car dans le workflow actuel, les factures sont créées directement comme des ventes
-    if not created:
-        return  # Uniquement à la création, pas aux mises à jour
-    
-    # Vérifier si on a déjà créé les mouvements pour cette facture
+    # Importer les modèles nécessaires
     from apps.inventory.models import StockMovement, Stock
     
-    existing_movements = StockMovement.objects.filter(
-        reference=f"FACT-{instance.invoice_number}"
-    ).exists()
-    
-    if existing_movements:
-        return  # Mouvements déjà créés
+    # Si c'est une mise à jour (created=False), les anciens mouvements ont déjà été supprimés
+    # par update_from_sale, donc on peut créer les nouveaux sans vérifier
+    if created:
+        # Vérifier si on a déjà créé les mouvements pour cette facture (uniquement pour les créations)
+        existing_movements = StockMovement.objects.filter(
+            reference=f"FACT-{instance.invoice_number}"
+        ).exists()
+        
+        if existing_movements:
+            return  # Mouvements déjà créés
     
     # Créer un mouvement pour chaque ligne de facture qui a un produit
     for line in instance.lines.all():
@@ -426,8 +493,8 @@ def create_stock_movements_from_invoice(sender, instance, created, **kwargs):
                 })
             
             try:
-                # Créer mouvement de sortie - le signal update_stock_on_movement mettra à jour le stock
-                StockMovement.objects.create(
+                # Créer mouvement de sortie
+                movement = StockMovement.objects.create(
                     product=line.product,
                     store=instance.store,
                     movement_type='out',
@@ -435,11 +502,15 @@ def create_stock_movements_from_invoice(sender, instance, created, **kwargs):
                     total_value=line.total,  # Montant total de la ligne (avec taxes)
                     invoice=instance,  # Lien vers la facture
                     reference=f"FACT-{instance.invoice_number}",
+                    date=instance.invoice_date,  # Date de réalisation du mouvement
                     notes=f"Sortie automatique - Facture {instance.invoice_number} - Client: {instance.customer.name}",
                     created_by=instance.created_by,
                     is_active=True
                 )
-                # Note: Le stock sera mis à jour automatiquement par le signal update_stock_on_movement
+                
+                # Mettre à jour le stock manuellement
+                stock.quantity -= line.quantity
+                stock.save()
                 
             except Exception as e:
                 import logging

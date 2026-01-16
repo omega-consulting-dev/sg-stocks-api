@@ -179,10 +179,19 @@ class InvoicePDFGenerator:
         customer_data = [
             [Paragraph('<b>CLIENT</b>', self.styles['Heading3'])],
             [Paragraph(f'<b>{customer.name if customer else "N/A"}</b>', self.styles['Normal'])],
-            [Paragraph(f'{customer.address if customer and customer.address else ""}', self.styles['Normal'])],
-            [Paragraph(f'Tél: {customer.phone if customer and customer.phone else "N/A"}', self.styles['Normal'])],
-            [Paragraph(f'Email: {customer.email if customer and customer.email else "N/A"}', self.styles['Normal'])],
         ]
+        
+        # Ajouter l'adresse si elle existe
+        if customer and customer.address:
+            customer_data.append([Paragraph(f'{customer.address}', self.styles['Normal'])])
+        
+        # Ajouter le téléphone si il existe et n'est pas juste des zéros
+        if customer and customer.phone and customer.phone.strip() and customer.phone.replace('0', '').strip():
+            customer_data.append([Paragraph(f'Tél: {customer.phone}', self.styles['Normal'])])
+        
+        # Ajouter l'email si il existe
+        if customer and customer.email and customer.email.strip():
+            customer_data.append([Paragraph(f'Email: {customer.email}', self.styles['Normal'])])
         
         customer_table = Table(customer_data, colWidths=[8*cm])
         customer_table.setStyle(TableStyle([
@@ -197,12 +206,16 @@ class InvoicePDFGenerator:
         ]))
         
         # Bloc infos facture (droite)
+        # Obtenir le statut et le modifier si c'est "Brouillon"
+        status_display = self.invoice.get_status_display()
+        if status_display == "Brouillon":
+            status_display = "À valider"
+        
         invoice_data = [
             [Paragraph('<b>INFORMATIONS</b>', self.styles['Heading3'])],
             [Paragraph(f'<b>Date d\'émission:</b> {self.invoice.invoice_date.strftime("%d/%m/%Y")}', self.styles['Normal'])],
-            [Paragraph(f'<b>Date d\'échéance:</b> {self.invoice.due_date.strftime("%d/%m/%Y")}', self.styles['Normal'])],
-            [Paragraph(f'<b>Magasin:</b> {store.name if store else "N/A"}', self.styles['Normal'])],
-            [Paragraph(f'<b>Statut:</b> {self.invoice.get_status_display()}', self.styles['Normal'])],
+            [Paragraph(f'<b>Point de vente:</b> {store.name if store else "N/A"}', self.styles['Normal'])],
+            [Paragraph(f'<b>Statut:</b> {status_display}', self.styles['Normal'])],
         ]
         
         invoice_table = Table(invoice_data, colWidths=[8*cm])

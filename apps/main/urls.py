@@ -6,12 +6,14 @@ from apps.main.views import RegisterView
 from apps.main.views_superadmin import SuperAdminLoginView
 from apps.main.views_settings import CompanySettingsViewSet, get_languages, set_language
 from apps.main.views_users import PublicUserViewSet
+from apps.main.views_contact import ContactMessageViewSet
 from core.views import NotificationViewSet
 
 router = DefaultRouter()
 router.register(r'settings', CompanySettingsViewSet, basename='company-settings')
 router.register(r'notifications', NotificationViewSet, basename='notifications')
 router.register(r'users', PublicUserViewSet, basename='public-users')
+router.register(r'contact-messages', ContactMessageViewSet, basename='contact-messages')
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),

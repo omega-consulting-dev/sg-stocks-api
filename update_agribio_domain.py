@@ -26,14 +26,14 @@ if tenant:
         current_domain.domain = new_domain_name
         current_domain.save()
         
-        print(f"\n✅ Domaine modifié : {new_domain_name}")
+        print(f"\n[OK] Domaine modifié : {new_domain_name}")
         print("\nVous pouvez maintenant vous connecter via:")
         print(f"  URL: http://agribio.localhost:5173")
         print(f"  Email: admin@agribio.com")
         print(f"  Password: Admin@2026")
-        print("\n⚠️  Note: Ajoutez cette ligne dans votre fichier hosts:")
+        print("\n[ATTENTION]  Note: Ajoutez cette ligne dans votre fichier hosts:")
         print("  127.0.0.1 agribio.localhost")
     else:
-        print("❌ Aucun domaine trouvé pour ce tenant")
+        print("[ERREUR] Aucun domaine trouvé pour ce tenant")
 else:
-    print("❌ Tenant AGRI BIO non trouvé")
+    print("[ERREUR] Tenant AGRI BIO non trouvé")

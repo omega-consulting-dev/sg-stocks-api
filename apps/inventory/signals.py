@@ -122,7 +122,7 @@ def notify_stock_issues(sender, instance, created, update_fields, **kwargs):
     # Ne notifier QUE si le stock a diminué ou reste critique
     # Ne PAS notifier si le stock augmente (entrée de stock)
     if old_quantity is not None and stock_quantity > old_quantity:
-        logger.info(f"[STOCK] ✅ Stock en augmentation pour {product.name} ({old_quantity} → {stock_quantity}), pas de notification")
+        logger.info(f"[STOCK] [OK] Stock en augmentation pour {product.name} ({old_quantity} -> {stock_quantity}), pas de notification")
         return
     
     # Si on ne peut pas déterminer le sens du changement, on vérifie seulement si stock critique
@@ -178,7 +178,7 @@ def notify_stock_issues(sender, instance, created, update_fields, **kwargs):
             )
             logger.info(f"[STOCK] Notification stock faible envoyée à {user.username}")
     else:
-        logger.info(f"[STOCK] ✅ Stock OK pour {product.name} dans {store.name} ({stock_quantity} > {product.minimum_stock})")
+        logger.info(f"[STOCK] [OK] Stock OK pour {product.name} dans {store.name} ({stock_quantity} > {product.minimum_stock})")
 
 
 @receiver(pre_save, sender=Stock)

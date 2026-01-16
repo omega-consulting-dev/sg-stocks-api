@@ -59,3 +59,7 @@ class BaseModel(TimeStampedModel, ActiveModel):
     """
     class Meta:
         abstract = True
+
+
+# Import field configuration model
+from core.models_field_config import FieldConfiguration
