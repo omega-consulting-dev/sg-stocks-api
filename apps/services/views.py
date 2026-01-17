@@ -61,9 +61,16 @@ class ServiceCategoryViewSet(viewsets.ModelViewSet):
         summary="Exporter les catégories en Excel",
         tags=["Services"]
     )
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_excel(self, request):
         """Export service categories to Excel."""
+        # Vérifier que l'utilisateur peut exporter OU voir les services
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_services'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         categories = self.filter_queryset(self.get_queryset())
         
         wb, ws = ExcelExporter.create_workbook("Catégories Services")
@@ -88,9 +95,16 @@ class ServiceCategoryViewSet(viewsets.ModelViewSet):
         summary="Exporter les catégories en PDF",
         tags=["Services"]
     )
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_pdf(self, request):
         """Export service categories to PDF."""
+        # Vérifier que l'utilisateur peut exporter OU voir les services
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_services'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         categories = self.filter_queryset(self.get_queryset())
         
         buffer = io.BytesIO()
@@ -292,9 +306,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
         summary="Exporter les services en Excel",
         tags=["Services"]
     )
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_excel(self, request):
         """Export services to Excel."""
+        # Vérifier que l'utilisateur peut exporter OU voir les services
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_services'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         services = self.filter_queryset(self.get_queryset())
         
         wb, ws = ExcelExporter.create_workbook("Services")
@@ -322,9 +343,16 @@ class ServiceViewSet(viewsets.ModelViewSet):
         summary="Exporter les services en PDF",
         tags=["Services"]
     )
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_pdf(self, request):
         """Export services to PDF."""
+        # Vérifier que l'utilisateur peut exporter OU voir les services
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_services'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         services = self.filter_queryset(self.get_queryset())
         
         buffer = io.BytesIO()

@@ -113,8 +113,11 @@ class HasModulePermission(permissions.BasePermission):
     Usage: Dans le viewset, définir module_name et action_required
     """
     
+    message = "Vous n'avez pas les droits nécessaires pour effectuer cette action. Veuillez contacter votre supérieur."
+    
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
+            self.message = "Vous devez être connecté pour effectuer cette action."
             return False
         
         # Super admin a tous les droits (toujours prioritaire)
@@ -172,12 +175,39 @@ class HasModulePermission(permissions.BasePermission):
         if not permission_name:
             logger.info("HasModulePermission denied: no permission_name resolved (user=%s, action=%s, module=%s)",
                         getattr(request.user, 'id', None), getattr(view, 'action', None), module_name)
+            self.message = "Permission non définie pour cette action."
             return False
 
         # Vérifier la permission via le rôle (méthode existante sur User)
         if hasattr(request.user, 'has_permission'):
             allowed = request.user.has_permission(permission_name)
             if not allowed:
+                # Personnaliser le message selon l'action
+                action_labels = {
+                    'add': 'créer',
+                    'change': 'modifier',
+                    'delete': 'supprimer',
+                    'view': 'consulter',
+                }
+                module_labels = {
+                    'products': 'les produits',
+                    'categories': 'les catégories',
+                    'services': 'les services',
+                    'inventory': 'le stock',
+                    'sales': 'les ventes',
+                    'customers': 'les clients',
+                    'suppliers': 'les fournisseurs',
+                    'cashbox': 'la caisse',
+                    'loans': 'les emprunts',
+                    'expenses': 'les dépenses',
+                    'users': 'les utilisateurs',
+                }
+                
+                action_label = action_labels.get(action, 'effectuer cette action sur')
+                module_label = module_labels.get(module_name, 'cette ressource')
+                
+                self.message = f"Vous n'avez pas les droits nécessaires pour {action_label} {module_label}. Veuillez contacter votre supérieur."
+                
                 # Log useful context for debugging why permission was denied
                 logger.info(
                     "HasModulePermission denied: user=%s is_superuser=%s role=%s permission_checked=%s action=%s view=%s",
@@ -190,6 +220,7 @@ class HasModulePermission(permissions.BasePermission):
                 )
             return allowed
 
+        self.message = "Impossible de vérifier vos permissions."
         return False
     
     def _ensure_superuser_has_role(self, user):

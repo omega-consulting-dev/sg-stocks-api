@@ -116,7 +116,13 @@ class Loan(AuditModel):
     
     def calculate_total_amount(self):
         """Calculate total amount including interest."""
-        interest_amount = (self.principal_amount * self.interest_rate * self.duration_months) / (100 * 12)
+        if self.loan_type == 'bank':
+            # Prêt bancaire: taux annuel proratisé sur la durée
+            interest_amount = (self.principal_amount * self.interest_rate * self.duration_months) / (100 * 12)
+        else:
+            # Prêt personnel, fournisseur, autre: taux simple sur le montant total
+            interest_amount = (self.principal_amount * self.interest_rate) / 100
+        
         self.total_amount = self.principal_amount + interest_amount
         return self.total_amount
     

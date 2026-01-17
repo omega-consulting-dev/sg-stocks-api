@@ -36,7 +36,7 @@ class LoanViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return LoanListSerializer
-        elif self.action == 'create':
+        elif self.action in ['create', 'update', 'partial_update']:
             return LoanCreateSerializer
         return LoanDetailSerializer
     

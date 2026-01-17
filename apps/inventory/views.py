@@ -589,7 +589,7 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
     filterset_class = StockMovementFilterSet
     search_fields = ['product__name', 'reference', 'supplier__name', 'supplier__supplier_code']
     ordering_fields = ['date', 'created_at', 'reference']
-    ordering = ['-date', '-id']  # Tri par date décroissante (plus récent en premier), puis par ID
+    ordering = ['date', 'id']  # Tri par date croissante (plus ancien en premier), puis par ID
     http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     def get_queryset(self):

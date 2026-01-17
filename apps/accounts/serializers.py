@@ -21,10 +21,20 @@ class LoginSerializer(TokenObtainPairSerializer):
         password = attrs.get('password')
 
         if email and password:
+            # Optimisation: select_related pour charger le rôle en une seule requête
+            from apps.accounts.models import User
+            try:
+                user_with_role = User.objects.select_related('role').get(email=email, is_active=True)
+            except User.DoesNotExist:
+                user_with_role = None
+            
             user = authenticate(request=self.context.get('request'), email=email, password=password)
 
-            if not user:
+            if not user or not user_with_role:
                 raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
+            
+            # Remplacer user par la version optimisée avec role déjà chargé
+            user = user_with_role
             
             # Vérifier si l'entreprise est suspendue
             from django.db import connection

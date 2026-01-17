@@ -204,9 +204,16 @@ class ProductViewSet(viewsets.ModelViewSet):
         description="Exporte la liste des produits au format Excel (.xlsx).",
         tags=["Produits"]
     )
-    @action(detail=False, methods=['get'], url_path='export_excel')
+    @action(detail=False, methods=['get'], url_path='export_excel', permission_classes=[IsAuthenticated])
     def export_excel(self, request, *args, **kwargs):
         """Export products to Excel."""
+        # Vérifier que l'utilisateur peut exporter OU voir les produits
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_products'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         products = self.filter_queryset(self.get_queryset())
         
         wb, ws = ExcelExporter.create_workbook("Produits")
@@ -214,7 +221,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         # Headers
         columns = [
             'Référence', 'Nom', 'Catégorie', 'Prix d\'achat',
-            'Prix de vente', 'TVA (%)', 'Stock min', 'Stock optimal', 'Actif'
+            'Prix de vente', 'TVA (%)', 'Stock Actuel', 'Stock min', 'Stock optimal', 'Actif'
         ]
         ExcelExporter.style_header(ws, columns)
         
@@ -226,9 +233,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             ws.cell(row=row_num, column=4, value=float(product.cost_price))
             ws.cell(row=row_num, column=5, value=float(product.selling_price))
             ws.cell(row=row_num, column=6, value=float(product.tax_rate))
-            ws.cell(row=row_num, column=7, value=product.minimum_stock)
-            ws.cell(row=row_num, column=8, value=product.optimal_stock)
-            ws.cell(row=row_num, column=9, value='Oui' if product.is_active else 'Non')
+            ws.cell(row=row_num, column=7, value=float(product.current_stock) if hasattr(product, 'current_stock') else 0)
+            ws.cell(row=row_num, column=8, value=product.minimum_stock)
+            ws.cell(row=row_num, column=9, value=product.optimal_stock)
+            ws.cell(row=row_num, column=10, value='Oui' if product.is_active else 'Non')
         
         ExcelExporter.auto_adjust_columns(ws)
         
@@ -239,9 +247,16 @@ class ProductViewSet(viewsets.ModelViewSet):
         summary="Exporter les produits en PDF",
         tags=["Products"]
     )
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def export_pdf(self, request):
         """Export products to PDF."""
+        # Vérifier que l'utilisateur peut exporter OU voir les produits
+        if not request.user.has_permission('can_export_data') and not request.user.has_permission('can_view_products'):
+            return Response(
+                {'detail': "Vous n'avez pas les droits nécessaires pour exporter les données. Veuillez contacter votre supérieur."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         products = self.filter_queryset(self.get_queryset())
         
         buffer = io.BytesIO()
@@ -261,12 +276,15 @@ class ProductViewSet(viewsets.ModelViewSet):
         # Table
         data = [['Réf.', 'Nom', 'Catégorie', 'Prix Vente', 'Stock']]
         for product in products[:100]:  # Limit to 100 for PDF
+            stock_value = float(product.current_stock) if hasattr(product, 'current_stock') else 0
+            # Debug: log la valeur du stock
+            print(f"DEBUG PDF Export - Product {product.reference}: current_stock={stock_value}, has_attr={hasattr(product, 'current_stock')}")
             data.append([
                 product.reference,
                 product.name[:30],
                 product.category.name,
                 f"{product.selling_price:,.0f}",
-                str(product.get_current_stock())
+                f"{stock_value:,.0f}"
             ])
         
         table = PDFExporter.create_table(data)

@@ -481,6 +481,57 @@ class StockTransferDetailSerializer(serializers.ModelSerializer):
             'lines', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
+    
+    def update(self, instance, validated_data):
+        """Update transfer - regenerate transfer_number if year doesn't match."""
+        # Sauvegarder l'ancien numéro
+        old_transfer_number = instance.transfer_number
+        
+        # Update transfer fields first
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Vérifier si le numéro de transfert correspond à l'année de la date
+        try:
+            year_in_number = int(instance.transfer_number[2:6])  # TRyyyy
+            actual_year = instance.transfer_date.year
+            
+            if year_in_number != actual_year:
+                # L'année ne correspond pas - régénérer le numéro
+                from django.db import transaction
+                
+                with transaction.atomic():
+                    # Get next number for the correct year
+                    last_transfer = StockTransfer.objects.filter(
+                        transfer_date__year=actual_year
+                    ).exclude(id=instance.id).select_for_update().order_by('-transfer_number').first()
+                    
+                    if last_transfer and last_transfer.transfer_number.startswith(f'TR{actual_year}'):
+                        try:
+                            last_number_str = last_transfer.transfer_number.replace('TR', '').replace(str(actual_year), '')
+                            last_number = int(last_number_str)
+                        except (ValueError, AttributeError):
+                            last_number = 0
+                    else:
+                        last_number = 0
+                    
+                    next_number = last_number + 1
+                    instance.transfer_number = f"TR{actual_year}{next_number:05d}"
+        except (ValueError, IndexError):
+            # Numéro invalide, on le garde
+            pass
+        
+        instance.save()
+        
+        # Update stock movements references AFTER saving (si le numéro a changé)
+        if old_transfer_number != instance.transfer_number:
+            from apps.inventory.models import StockMovement
+            updated_count = StockMovement.objects.filter(reference=old_transfer_number).update(reference=instance.transfer_number)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Updated {updated_count} movements: {old_transfer_number} → {instance.transfer_number}")
+        
+        return instance
 
 
 class StockTransferCreateSerializer(serializers.ModelSerializer):
@@ -535,12 +586,15 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         lines_data = validated_data.pop('lines')
         
-        # Generate transfer number
+        # Generate transfer number using transfer_date year (not current year)
         from django.utils import timezone
+        transfer_date = validated_data.get('transfer_date', timezone.now().date())
+        transfer_year = transfer_date.year
+        
         count = StockTransfer.objects.filter(
-            created_at__year=timezone.now().year
+            transfer_date__year=transfer_year
         ).count() + 1
-        validated_data['transfer_number'] = f"TR{timezone.now().year}{count:05d}"
+        validated_data['transfer_number'] = f"TR{transfer_year}{count:05d}"
         
         # Si le statut est in_transit, mettre à jour les stocks automatiquement
         status = validated_data.get('status', 'draft')
@@ -593,6 +647,67 @@ class StockTransferCreateSerializer(serializers.ModelSerializer):
             transfer.save()
         
         return transfer
+    
+    def update(self, instance, validated_data):
+        """Update transfer - regenerate transfer_number if year changes."""
+        lines_data = validated_data.pop('lines', None)
+        
+        # Check if transfer_date year is changing - if so, regenerate transfer_number
+        new_transfer_date = validated_data.get('transfer_date', instance.transfer_date)
+        # Sauvegarder l'ancien numéro
+        old_transfer_number = instance.transfer_number
+        
+        # Update transfer fields first
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Vérifier si le numéro de transfert correspond à l'année de la date
+        try:
+            year_in_number = int(instance.transfer_number[2:6])  # TRyyyy
+            actual_year = instance.transfer_date.year
+            
+            if year_in_number != actual_year:
+                # L'année ne correspond pas - régénérer le numéro
+                from django.db import transaction
+                
+                with transaction.atomic():
+                    # Get next number for the correct year
+                    last_transfer = StockTransfer.objects.filter(
+                        transfer_date__year=actual_year
+                    ).exclude(id=instance.id).select_for_update().order_by('-transfer_number').first()
+                    
+                    if last_transfer and last_transfer.transfer_number.startswith(f'TR{actual_year}'):
+                        try:
+                            last_number_str = last_transfer.transfer_number.replace('TR', '').replace(str(actual_year), '')
+                            last_number = int(last_number_str)
+                        except (ValueError, AttributeError):
+                            last_number = 0
+                    else:
+                        last_number = 0
+                    
+                    next_number = last_number + 1
+                    instance.transfer_number = f"TR{actual_year}{next_number:05d}"
+        except (ValueError, IndexError):
+            # Numéro invalide, on le garde
+            pass
+        
+        instance.save()
+        
+        # Update stock movements references AFTER saving (si le numéro a changé)
+        if old_transfer_number != instance.transfer_number:
+            from apps.inventory.models import StockMovement
+            updated_count = StockMovement.objects.filter(reference=old_transfer_number).update(reference=instance.transfer_number)
+            print(f"Updated {updated_count} movements: {old_transfer_number} → {instance.transfer_number}")
+        
+        # Update lines if provided
+        if lines_data is not None:
+            # Delete existing lines and create new ones
+            instance.lines.all().delete()
+            
+            for line_data in lines_data:
+                StockTransferLine.objects.create(transfer=instance, **line_data)
+        
+        return instance
 
 
 class InventoryLineSerializer(serializers.ModelSerializer):

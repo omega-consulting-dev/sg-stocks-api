@@ -79,6 +79,72 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'created_by', 'updated_by'
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by', 'updated_by']
+    
+    def update(self, instance, validated_data):
+        """Update invoice - regenerate invoice_number if year doesn't match."""
+        # Sauvegarder l'ancien numéro pour mettre à jour les mouvements
+        old_invoice_number = instance.invoice_number
+        
+        # Update invoice fields first
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Vérifier si le numéro de facture correspond à l'année de la date
+        # Extraire l'année du numéro actuel (FACyyyy...)
+        try:
+            year_in_number = int(instance.invoice_number[3:7])
+            actual_year = instance.invoice_date.year
+            
+            if year_in_number != actual_year:
+                # L'année ne correspond pas - régénérer le numéro
+                from django.db import transaction
+                
+                with transaction.atomic():
+                    # Get next number for the correct year
+                    last_invoice = Invoice.objects.filter(
+                        invoice_date__year=actual_year
+                    ).exclude(id=instance.id).select_for_update().order_by('-invoice_number').first()
+                    
+                    if last_invoice and last_invoice.invoice_number.startswith(f'FAC{actual_year}'):
+                        try:
+                            last_number_str = last_invoice.invoice_number.replace('FAC', '').replace(str(actual_year), '')
+                            last_number = int(last_number_str)
+                        except (ValueError, AttributeError):
+                            last_number = 0
+                    else:
+                        last_number = 0
+                    
+                    next_number = last_number + 1
+                    instance.invoice_number = f"FAC{actual_year}{next_number:06d}"
+        except (ValueError, IndexError):
+            # Numéro de facture invalide, on le garde tel quel
+            pass
+        
+        # Recalculate due date if payment_term or invoice_date changed
+        if 'payment_term' in validated_data or 'invoice_date' in validated_data:
+            payment_term = instance.payment_term
+            days_map = {
+                'immediate': 0,
+                '15_days': 15,
+                '30_days': 30,
+                '60_days': 60,
+            }
+            days = days_map.get(payment_term, 30)
+            instance.due_date = instance.invoice_date + timedelta(days=days)
+        
+        instance.save()
+        
+        # Update stock movements references AFTER saving (si le numéro a changé)
+        if old_invoice_number != instance.invoice_number:
+            from apps.inventory.models import StockMovement
+            old_ref = f"FACT-{old_invoice_number}"
+            new_ref = f"FACT-{instance.invoice_number}"
+            updated_count = StockMovement.objects.filter(reference=old_ref).update(reference=new_ref)
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Updated {updated_count} movements: {old_ref} → {new_ref}")
+        
+        return instance
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
@@ -100,8 +166,9 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         
         # Utiliser une transaction atomique pour tout annuler si le stock est insuffisant
         with transaction.atomic():
-            # Generate invoice number
-            year = timezone.now().year
+            # Generate invoice number using invoice_date year (not current year)
+            invoice_date = validated_data.get('invoice_date', timezone.now().date())
+            year = invoice_date.year
             count = Invoice.objects.filter(invoice_date__year=year).count() + 1
             validated_data['invoice_number'] = f"FAC{year}{count:06d}"
             
@@ -134,3 +201,83 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
             create_stock_movements_from_invoice(sender=Invoice, instance=invoice, created=True)
             
             return invoice
+    
+    def update(self, instance, validated_data):
+        """Update invoice - regenerate invoice_number if year doesn't match."""
+        lines_data = validated_data.pop('lines', None)
+        
+        # Sauvegarder l'ancien numéro pour mettre à jour les mouvements
+        old_invoice_number = instance.invoice_number
+        
+        # Update invoice fields first
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Vérifier si le numéro de facture correspond à l'année de la date
+        # Extraire l'année du numéro actuel (FACyyyy...)
+        try:
+            year_in_number = int(instance.invoice_number[3:7])
+            actual_year = instance.invoice_date.year
+            
+            if year_in_number != actual_year:
+                # L'année ne correspond pas - régénérer le numéro
+                from django.db import transaction
+                
+                with transaction.atomic():
+                    # Get next number for the correct year
+                    last_invoice = Invoice.objects.filter(
+                        invoice_date__year=actual_year
+                    ).exclude(id=instance.id).select_for_update().order_by('-invoice_number').first()
+                    
+                    if last_invoice and last_invoice.invoice_number.startswith(f'FAC{actual_year}'):
+                        try:
+                            last_number_str = last_invoice.invoice_number.replace('FAC', '').replace(str(actual_year), '')
+                            last_number = int(last_number_str)
+                        except (ValueError, AttributeError):
+                            last_number = 0
+                    else:
+                        last_number = 0
+                    
+                    next_number = last_number + 1
+                    instance.invoice_number = f"FAC{actual_year}{next_number:06d}"
+        except (ValueError, IndexError):
+            # Numéro de facture invalide, on le garde tel quel
+            pass
+        
+        # Recalculate due date if payment_term or invoice_date changed
+        if 'payment_term' in validated_data or 'invoice_date' in validated_data:
+            payment_term = instance.payment_term
+            days_map = {
+                'immediate': 0,
+                '15_days': 15,
+                '30_days': 30,
+                '60_days': 60,
+            }
+            days = days_map.get(payment_term, 30)
+            instance.due_date = instance.invoice_date + timedelta(days=days)
+        
+        instance.save()
+        
+        # Update stock movements references AFTER saving (si le numéro a changé)
+        if old_invoice_number != instance.invoice_number:
+            from apps.inventory.models import StockMovement
+            old_ref = f"FACT-{old_invoice_number}"
+            new_ref = f"FACT-{instance.invoice_number}"
+            updated_count = StockMovement.objects.filter(reference=old_ref).update(reference=new_ref)
+            print(f"Updated {updated_count} movements: {old_ref} → {new_ref}")
+        
+        # Update lines if provided
+        if lines_data is not None:
+            # Delete existing lines
+            instance.lines.all().delete()
+            
+            for line_data in lines_data:
+                InvoiceLine.objects.create(invoice=instance, **line_data)
+            
+            # Recalculate totals
+            instance.subtotal = sum(line.subtotal_after_discount for line in instance.lines.all())
+            instance.tax_amount = sum(line.tax_amount for line in instance.lines.all())
+            instance.total_amount = instance.subtotal + instance.tax_amount
+            instance.save(update_fields=['subtotal', 'tax_amount', 'total_amount'])
+        
+        return instance

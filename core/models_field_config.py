@@ -16,6 +16,8 @@ class FieldConfiguration(TimeStampedModel):
         ('service_table', 'Tableau Service'),
         ('purchase', 'Achat (Entrée Stock)'),
         ('purchase_table', 'Tableau Achat'),
+        ('loan', 'Emprunt'),
+        ('loan_table', 'Tableau Emprunt'),
         ('customer', 'Client'),
         ('supplier', 'Fournisseur'),
         ('sale', 'Vente'),

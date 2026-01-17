@@ -37,13 +37,14 @@ class SaleListSerializer(serializers.ModelSerializer):
     payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
     lines = SaleLineSerializer(many=True, read_only=True)
     invoice_id = serializers.SerializerMethodField()
+    invoice = serializers.SerializerMethodField()
     
     class Meta:
         model = Sale
         fields = [
             'id', 'sale_number', 'customer', 'store', 'sale_date', 
             'status', 'status_display', 'total_amount', 'paid_amount', 
-            'payment_status', 'payment_status_display', 'lines', 'invoice_id', 'created_at'
+            'payment_status', 'payment_status_display', 'lines', 'invoice_id', 'invoice', 'created_at'
         ]
     
     def get_customer(self, obj):
@@ -59,6 +60,15 @@ class SaleListSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'invoice') and obj.invoice:
             return obj.invoice.id
         return None
+    
+    def get_invoice(self, obj):
+        """Return invoice details if invoice exists."""
+        if hasattr(obj, 'invoice') and obj.invoice:
+            return {
+                'id': obj.invoice.id,
+                'invoice_number': obj.invoice.invoice_number
+            }
+        return None
 
 
 class SaleDetailSerializer(serializers.ModelSerializer):
@@ -72,6 +82,7 @@ class SaleDetailSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     payments = serializers.SerializerMethodField()
     invoice_id = serializers.SerializerMethodField()
+    invoice = serializers.SerializerMethodField()
     
     class Meta:
         model = Sale
@@ -79,7 +90,7 @@ class SaleDetailSerializer(serializers.ModelSerializer):
             'id', 'sale_number', 'customer', 'store',
             'sale_date', 'status', 'status_display', 'subtotal', 'discount_amount', 'tax_amount',
             'total_amount', 'payment_status', 'paid_amount', 'balance_due',
-            'is_fully_paid', 'notes', 'lines', 'payments', 'invoice_id',
+            'is_fully_paid', 'notes', 'lines', 'payments', 'invoice_id', 'invoice',
             'created_at', 'updated_at', 'created_by', 'updated_by'
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by', 'updated_by']
@@ -110,6 +121,15 @@ class SaleDetailSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'invoice') and obj.invoice:
             return obj.invoice.id
         return None
+    
+    def get_invoice(self, obj):
+        """Return invoice details if invoice exists."""
+        if hasattr(obj, 'invoice') and obj.invoice:
+            return {
+                'id': obj.invoice.id,
+                'invoice_number': obj.invoice.invoice_number
+            }
+        return None
 
 
 class SaleCreateSerializer(serializers.ModelSerializer):
@@ -134,11 +154,10 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         paid_amount = validated_data.pop('paid_amount', 0)
         customer = validated_data.get('customer')
         
-        # Generate sale number
+        # Generate sale number and create sale - thread-safe method
         from django.utils import timezone
         from decimal import Decimal
-        count = Sale.objects.filter(sale_date__year=timezone.now().year).count() + 1
-        validated_data['sale_number'] = f"VTE{timezone.now().year}{count:06d}"
+        from django.db import transaction
         
         # Arrondir paid_amount à 2 décimales pour éviter les problèmes de précision
         if paid_amount:
@@ -147,30 +166,59 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         # Set paid_amount in validated_data
         validated_data['paid_amount'] = paid_amount
         
-        sale = Sale.objects.create(**validated_data)
+        # Extraire l'année de la sale_date fournie
+        sale_date = validated_data.get('sale_date')
+        if not sale_date:
+            sale_date = timezone.now().date()
+            validated_data['sale_date'] = sale_date
         
-        # Create lines
-        for line_data in lines_data:
-            SaleLine.objects.create(sale=sale, **line_data)
+        sale_year = sale_date.year
         
-        # Calculate totals (this will also update payment_status based on paid_amount)
-        sale.calculate_totals()
-        
-        # Validation: Les clients de passage (No Name ou sans client) doivent payer la totalité
-        is_no_name_customer = False
-        if customer:
-            # Vérifier si c'est un client "No Name" / "Client de passage"
-            customer_name = customer.name.lower() if hasattr(customer, 'name') else ''
-            is_no_name_customer = any(keyword in customer_name for keyword in [
-                'no name', 'client no name', 'client de passage', 'passage'
-            ])
-        
-        if (not customer or is_no_name_customer) and sale.balance_due > 0:
-            raise serializers.ValidationError({
-                'paid_amount': 'Les clients de passage ne peuvent pas avoir de crédit. Veuillez payer la totalité ou créer un client réel pour autoriser le crédit.'
-            })
-        
-        sale.save()
+        # Utiliser une transaction atomique pour TOUT le processus de création
+        with transaction.atomic():
+            # Récupérer la dernière vente de L'ANNÉE DE LA VENTE en utilisant select_for_update pour éviter les doublons
+            last_sale = Sale.objects.filter(
+                sale_date__year=sale_year
+            ).select_for_update().order_by('-sale_number').first()
+            
+            if last_sale and last_sale.sale_number:
+                # Extraire le numéro séquentiel du dernier numéro (ex: VTE2026000005 → 5)
+                try:
+                    last_number = int(last_sale.sale_number[-6:])
+                    next_number = last_number + 1
+                except (ValueError, IndexError):
+                    # Si on ne peut pas extraire, compter toutes les ventes de l'année
+                    next_number = Sale.objects.filter(sale_date__year=sale_year).count() + 1
+            else:
+                next_number = 1
+            
+            validated_data['sale_number'] = f"VTE{sale_year}{next_number:06d}"
+            
+            # Créer la vente DANS la transaction
+            sale = Sale.objects.create(**validated_data)
+            
+            # Create lines
+            for line_data in lines_data:
+                SaleLine.objects.create(sale=sale, **line_data)
+            
+            # Calculate totals (this will also update payment_status based on paid_amount)
+            sale.calculate_totals()
+            
+            # Validation: Les clients de passage (No Name ou sans client) doivent payer la totalité
+            is_no_name_customer = False
+            if customer:
+                # Vérifier si c'est un client "No Name" / "Client de passage"
+                customer_name = customer.name.lower() if hasattr(customer, 'name') else ''
+                is_no_name_customer = any(keyword in customer_name for keyword in [
+                    'no name', 'client no name', 'client de passage', 'passage'
+                ])
+            
+            if (not customer or is_no_name_customer) and sale.balance_due > 0:
+                raise serializers.ValidationError({
+                    'paid_amount': 'Les clients de passage ne peuvent pas avoir de crédit. Veuillez payer la totalité ou créer un client réel pour autoriser le crédit.'
+                })
+            
+            sale.save()
         
         return sale
     
@@ -179,9 +227,42 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         lines_data = validated_data.pop('lines', [])
         paid_amount = validated_data.pop('paid_amount', instance.paid_amount)
         
-        # Update sale fields
+        # Sauvegarder l'ancien numéro
+        old_sale_number = instance.sale_number
+        
+        # Update sale fields first
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+        
+        # Vérifier si le numéro de vente correspond à l'année de la date
+        try:
+            year_in_number = int(instance.sale_number[3:7])  # VTEyyyy
+            actual_year = instance.sale_date.year
+            
+            if year_in_number != actual_year:
+                # L'année ne correspond pas - régénérer le numéro
+                from django.db import transaction
+                
+                with transaction.atomic():
+                    # Get next number for the correct year
+                    last_sale = Sale.objects.filter(
+                        sale_date__year=actual_year
+                    ).exclude(id=instance.id).select_for_update().order_by('-sale_number').first()
+                    
+                    if last_sale and last_sale.sale_number.startswith(f'VTE{actual_year}'):
+                        try:
+                            last_number_str = last_sale.sale_number.replace('VTE', '').replace(str(actual_year), '')
+                            last_number = int(last_number_str)
+                        except (ValueError, AttributeError):
+                            last_number = 0
+                    else:
+                        last_number = 0
+                    
+                    next_number = last_number + 1
+                    instance.sale_number = f"VTE{actual_year}{next_number:06d}"
+        except (ValueError, IndexError):
+            # Numéro invalide, on le garde
+            pass
         
         # Arrondir paid_amount à 2 décimales
         if paid_amount:
@@ -199,6 +280,12 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         # Recalculate totals
         instance.calculate_totals()
         instance.save()
+        
+        # Update stock movements references AFTER saving (si le numéro a changé)
+        if old_sale_number != instance.sale_number:
+            from apps.inventory.models import StockMovement
+            updated_count = StockMovement.objects.filter(reference=old_sale_number).update(reference=instance.sale_number)
+            print(f"Updated {updated_count} movements: {old_sale_number} → {instance.sale_number}")
         
         # NOTE: Ne pas gérer les mouvements de stock ici !
         # Si la vente est confirmée, le signal auto_generate_invoice_on_confirmation

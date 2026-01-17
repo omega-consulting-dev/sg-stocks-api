@@ -80,6 +80,17 @@ class LoanCreateSerializer(serializers.ModelSerializer):
         
         return loan
     
+    def update(self, instance, validated_data):
+        # Update all fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        
+        # Recalculate total amount with new values
+        instance.calculate_total_amount()
+        instance.save()
+        
+        return instance
+    
     def _generate_schedule(self, loan):
         """Generate loan repayment schedule."""
         from dateutil.relativedelta import relativedelta
