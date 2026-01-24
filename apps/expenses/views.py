@@ -10,6 +10,7 @@ from core.utils.export_utils import ExcelExporter
 
 from apps.expenses.models import Expense, ExpenseCategory
 from apps.expenses.serializers import ExpenseSerializer, ExpenseCategorySerializer
+from apps.cashbox.models import Cashbox
 
 
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
@@ -119,9 +120,43 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Vérifier le solde de la caisse si le paiement est en espèces
+        payment_method = request.data.get('payment_method')
+        if payment_method == 'cash':
+            # Si la dépense n'a pas de point de vente assigné
+            if not expense.store:
+                return Response(
+                    {'error': 'Cette dépense n\'a pas de point de vente assigné. Veuillez d\'abord modifier la dépense et sélectionner un point de vente.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Chercher une caisse active pour ce point de vente
+            cashbox = Cashbox.objects.filter(
+                store=expense.store,
+                is_active=True
+            ).first()
+            
+            if not cashbox:
+                return Response(
+                    {'error': f'Aucune caisse active n\'est disponible pour le point de vente {expense.store.name}. Veuillez créer ou activer une caisse pour ce point de vente.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Calculer le solde réel de la caisse basé sur les transactions
+            from apps.cashbox.utils import get_cashbox_real_balance
+            real_balance = get_cashbox_real_balance(store_id=expense.store.id)
+            
+            if real_balance < expense.amount:
+                return Response(
+                    {
+                        'error': f'Solde insuffisant dans la caisse {cashbox.name}. Solde disponible : {real_balance:,.0f} FCFA, montant requis : {expense.amount:,.0f} FCFA.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
         expense.status = 'paid'
         expense.payment_date = timezone.now().date()
-        expense.payment_method = request.data.get('payment_method')
+        expense.payment_method = payment_method
         expense.payment_reference = request.data.get('payment_reference', '')
         expense.save()
         

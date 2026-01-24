@@ -1,0 +1,151 @@
+"""
+Signals pour la gestion automatique des caisses.
+"""
+from django.db.models.signals import post_save, pre_save
+from django.dispatch import receiver
+from django.db import transaction
+from apps.inventory.models import Store
+from decimal import Decimal
+
+
+@receiver(post_save, sender=Store)
+def create_cashbox_for_store(sender, instance, created, **kwargs):
+    """
+    Crée automatiquement une caisse quand un nouveau point de vente est créé.
+    """
+    if created:
+        from apps.cashbox.models import Cashbox
+        
+        # Vérifier si une caisse existe déjà pour ce store
+        if not Cashbox.objects.filter(store=instance).exists():
+            # Créer une caisse pour ce point de vente
+            Cashbox.objects.create(
+                name=f"Caisse {instance.name}",
+                code=f"CAISSE-{instance.code}",
+                store=instance,
+                current_balance=0,
+                is_active=True
+            )
+
+
+# ========== SIGNAUX POUR METTRE À JOUR LA CAISSE ==========
+
+@receiver(post_save, sender='sales.Sale')
+def update_cashbox_on_sale_payment(sender, instance, created, **kwargs):
+    """
+    Met à jour le solde de la caisse quand une vente est payée.
+    """
+    from apps.cashbox.models import Cashbox
+    
+    # Vérifier si le paid_amount a changé
+    if not created and hasattr(instance, '_old_paid_amount'):
+        old_paid = instance._old_paid_amount or Decimal('0')
+        new_paid = instance.paid_amount or Decimal('0')
+        difference = new_paid - old_paid
+        
+        if difference != 0 and instance.store:
+            cashbox = Cashbox.objects.filter(
+                store=instance.store,
+                is_active=True
+            ).first()
+            
+            if cashbox:
+                with transaction.atomic():
+                    cashbox.current_balance += difference
+                    cashbox.save(update_fields=['current_balance'])
+
+
+@receiver(pre_save, sender='sales.Sale')
+def track_sale_payment_change(sender, instance, **kwargs):
+    """Suivre les changements de paiement des ventes."""
+    if instance.pk:
+        try:
+            from apps.sales.models import Sale
+            old_sale = Sale.objects.get(pk=instance.pk)
+            instance._old_paid_amount = old_sale.paid_amount
+        except:
+            instance._old_paid_amount = Decimal('0')
+    else:
+        instance._old_paid_amount = Decimal('0')
+
+
+@receiver(post_save, sender='invoicing.InvoicePayment')
+def update_cashbox_on_invoice_payment(sender, instance, created, **kwargs):
+    """
+    Met à jour le solde de la caisse quand un paiement de facture en espèces est effectué.
+    """
+    from apps.cashbox.models import Cashbox
+    
+    if created and instance.payment_method == 'cash' and instance.invoice.store:
+        cashbox = Cashbox.objects.filter(
+            store=instance.invoice.store,
+            is_active=True
+        ).first()
+        
+        if cashbox:
+            with transaction.atomic():
+                cashbox.current_balance += instance.amount
+                cashbox.save(update_fields=['current_balance'])
+
+
+@receiver(post_save, sender='suppliers.SupplierPayment')
+def update_cashbox_on_supplier_payment(sender, instance, created, **kwargs):
+    """
+    Met à jour le solde de la caisse quand un paiement fournisseur en espèces est effectué.
+    """
+    from apps.cashbox.models import Cashbox
+    
+    if created and instance.payment_method == 'cash' and instance.purchase_order and instance.purchase_order.store:
+        cashbox = Cashbox.objects.filter(
+            store=instance.purchase_order.store,
+            is_active=True
+        ).first()
+        
+        if cashbox:
+            with transaction.atomic():
+                cashbox.current_balance -= instance.amount
+                cashbox.save(update_fields=['current_balance'])
+
+
+@receiver(post_save, sender='cashbox.CashMovement')
+def update_cashbox_on_cash_movement(sender, instance, created, **kwargs):
+    """
+    Met à jour le solde de la caisse lors des mouvements de caisse.
+    """
+    from apps.cashbox.models import Cashbox
+    
+    if created and instance.cashbox_session:
+        with transaction.atomic():
+            cashbox = Cashbox.objects.select_for_update().get(pk=instance.cashbox_session.cashbox.pk)
+            
+            if instance.movement_type == 'in':
+                # Entrée d'argent
+                cashbox.current_balance += instance.amount
+            elif instance.movement_type == 'out':
+                # Sortie d'argent
+                cashbox.current_balance -= instance.amount
+            
+            cashbox.save(update_fields=['current_balance'])
+
+
+@receiver(post_save, sender='loans.LoanPayment')
+def update_cashbox_on_loan_payment(sender, instance, created, **kwargs):
+    """
+    Met à jour le solde de la caisse quand un paiement d'emprunt en espèces est effectué.
+    IMPORTANT: Pour un admin sans point de vente assigné, le paiement ne débitera aucune caisse
+    si le prêt n'a pas de store associé.
+    """
+    from apps.cashbox.models import Cashbox
+    
+    if created and instance.payment_method == 'cash' and instance.loan.store:
+        cashbox = Cashbox.objects.filter(
+            store=instance.loan.store,
+            is_active=True
+        ).first()
+        
+        if cashbox:
+            with transaction.atomic():
+                # Débiter la caisse du montant du paiement
+                cashbox.current_balance -= instance.amount
+                cashbox.save(update_fields=['current_balance'])
+

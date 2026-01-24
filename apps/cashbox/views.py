@@ -237,6 +237,8 @@ class EncaissementsListView(APIView):
             sales = sales.filter(sale_date__gte=start_date)
         if end_date:
             sales = sales.filter(sale_date__lte=end_date)
+        if store_id:
+            sales = sales.filter(store_id=store_id)
         
         for sale in sales:
             encaissements.append({
@@ -434,8 +436,8 @@ class EncaissementsExportView(APIView):
 
 class CaisseSoldeView(APIView):
     """
-    Vue pour calculer le solde actuel de la caisse
-    Prend en compte : encaissements - dépenses - paiements fournisseurs - remboursements emprunts
+    Vue pour calculer le solde actuel de la caisse basé sur les transactions réelles.
+    Utilise la fonction utilitaire get_cashbox_real_balance pour garantir la cohérence.
     """
     
     def get(self, request):
@@ -444,128 +446,31 @@ class CaisseSoldeView(APIView):
         # Récupérer le paramètre store
         store_id = request.query_params.get('store')
         
-        # Total des encaissements (entrées d'argent)
-        # 1. Paiements de factures
-        invoice_payments_qs = InvoicePayment.objects.all()
+        # Filtrage par utilisateur pour les non-admins
+        if not (user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all')):
+            # Utilisateur normal : filtrer par stores assignés
+            if hasattr(user, 'assigned_stores') and user.assigned_stores.exists():
+                # Si un store spécifique est demandé, vérifier qu'il est assigné
+                if store_id:
+                    if not user.assigned_stores.filter(id=store_id).exists():
+                        return Response({'solde_actuel': 0.0})
+                else:
+                    # Calculer le total pour tous les stores assignés
+                    from apps.cashbox.utils import get_cashbox_real_balance
+                    total_balance = sum(
+                        get_cashbox_real_balance(store_id=s.id) 
+                        for s in user.assigned_stores.all()
+                    )
+                    return Response({'solde_actuel': float(total_balance)})
+            else:
+                return Response({'solde_actuel': 0.0})
         
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tous les paiements
-            pass
-        else:
-            # Utilisateur normal voit uniquement les paiements des factures qu'il a créées
-            invoice_payments_qs = invoice_payments_qs.filter(invoice__created_by=user)
-        
-        if store_id:
-            invoice_payments_qs = invoice_payments_qs.filter(invoice__store_id=store_id)
-        total_invoice_payments = invoice_payments_qs.aggregate(
-            total=Sum('amount')
-        )['total'] or 0
-        
-        # 2. Ventes payées (créées par l'utilisateur)
-        sales_qs = Sale.objects.all()
-        
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit toutes les ventes
-            pass
-        else:
-            # Utilisateur normal voit uniquement les ventes qu'il a créées
-            sales_qs = sales_qs.filter(created_by=user)
-        
-        if store_id:
-            sales_qs = sales_qs.filter(store_id=store_id)
-        total_sales = sales_qs.aggregate(
-            total=Sum('paid_amount')
-        )['total'] or 0
-        
-        total_encaissements = total_invoice_payments + total_sales
-        
-        # Total des sorties d'argent
-        # 1. Dépenses
-        expenses_qs = Expense.objects.all()
-        
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit toutes les dépenses
-            pass
-        else:
-            # Utilisateur normal voit uniquement les dépenses qu'il a créées
-            expenses_qs = expenses_qs.filter(created_by=user)
-        
-        if store_id:
-            expenses_qs = expenses_qs.filter(store_id=store_id)
-        total_expenses = expenses_qs.aggregate(
-            total=Sum('amount')
-        )['total'] or 0
-        
-        # 2. Paiements fournisseurs
-        supplier_payments_qs = SupplierPayment.objects.all()
-        
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tous les paiements
-            pass
-        else:
-            # Utilisateur normal voit uniquement les paiements qu'il a créés
-            supplier_payments_qs = supplier_payments_qs.filter(created_by=user)
-        
-        # Note: SupplierPayment n'a pas de champ store
-        total_supplier_payments = supplier_payments_qs.aggregate(
-            total=Sum('amount')
-        )['total'] or 0
-        
-        # 3. Remboursements d'emprunts
-        loan_payments_qs = LoanPayment.objects.all()
-        
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tous les remboursements
-            pass
-        else:
-            # Utilisateur normal voit uniquement les remboursements qu'il a créés
-            loan_payments_qs = loan_payments_qs.filter(created_by=user)
-        
-        if store_id:
-            loan_payments_qs = loan_payments_qs.filter(loan__store_id=store_id)
-        total_loan_payments = loan_payments_qs.aggregate(
-            total=Sum('amount')
-        )['total'] or 0
-        
-        # 4. Décaissements (mouvements de caisse sortants)
-        cash_movements_out_qs = CashMovement.objects.filter(movement_type='out')
-        
-        # Filtrage par utilisateur - ALIGNÉ AVEC LE DASHBOARD
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tous les mouvements
-            pass
-        else:
-            # Utilisateur normal voit uniquement les mouvements qu'il a créés
-            cash_movements_out_qs = cash_movements_out_qs.filter(created_by=user)
-        
-        if store_id:
-            cash_movements_out_qs = cash_movements_out_qs.filter(cashbox_session__cashbox__store_id=store_id)
-        total_cash_movements_out = cash_movements_out_qs.aggregate(
-            total=Sum('amount')
-        )['total'] or 0
-        
-        total_sorties = total_expenses + total_supplier_payments + total_loan_payments + total_cash_movements_out
-        
-        # Solde de caisse = Encaissements - Sorties
-        solde_caisse = total_encaissements - total_sorties
+        # Admin ou access_scope='all' : calculer le solde
+        from apps.cashbox.utils import get_cashbox_real_balance
+        real_balance = get_cashbox_real_balance(store_id=store_id)
         
         return Response({
-            'solde_actuel': float(solde_caisse),
-            'total_encaissements': float(total_encaissements),
-            'total_sorties': float(total_sorties),
-            'details': {
-                'paiements_factures': float(total_invoice_payments),
-                'ventes': float(total_sales),
-                'depenses': float(total_expenses),
-                'paiements_fournisseurs': float(total_supplier_payments),
-                'remboursements_emprunts': float(total_loan_payments),
-                'decaissements': float(total_cash_movements_out),
-            }
+            'solde_actuel': float(real_balance),
         })
 
 
@@ -627,15 +532,17 @@ class DecaissementsListView(APIView):
         
         for movement in cash_movements:
             decaissements.append({
-                'id': f'DEC-{movement.id}',
+                'id': movement.id,  # ID numérique du CashMovement
                 'code': movement.movement_number,
                 'type': 'Approvisionnement Bancaire',
                 'date': movement.created_at.date(),
                 'reference': movement.reference or movement.movement_number,
                 'montant': float(movement.amount),
                 'mode_paiement': movement.get_payment_method_display(),
+                'payment_method': movement.payment_method,  # Valeur brute pour l'édition
                 'description': movement.description,
                 'created_at': movement.created_at,
+                'store_id': movement.cashbox_session.cashbox.store_id if movement.cashbox_session and movement.cashbox_session.cashbox else None,
             })
         
         # Trier par date décroissante
@@ -734,8 +641,8 @@ class DecaissementsExportView(APIView):
         header_font = Font(color="FFFFFF", bold=True, size=12)
         header_alignment = Alignment(horizontal="center", vertical="center")
         
-        # En-têtes
-        headers = ['Code', 'Type', 'Date', 'Référence', 'Montant (FCFA)', 'Mode de paiement', 'Description']
+        # En-têtes (sans Référence et Mode de paiement)
+        headers = ['Code', 'Type', 'Date', 'Montant (FCFA)', 'Description']
         for col_num, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_num)
             cell.value = header
@@ -748,21 +655,19 @@ class DecaissementsExportView(APIView):
             ws.cell(row=row_num, column=1, value=dec['code'])
             ws.cell(row=row_num, column=2, value=dec['type'])
             ws.cell(row=row_num, column=3, value=dec['date'].strftime('%d/%m/%Y'))
-            ws.cell(row=row_num, column=4, value=dec['reference'])
-            ws.cell(row=row_num, column=5, value=dec['montant'])
-            ws.cell(row=row_num, column=6, value=dec['mode_paiement'])
-            ws.cell(row=row_num, column=7, value=dec['description'])
+            ws.cell(row=row_num, column=4, value=dec['montant'])
+            ws.cell(row=row_num, column=5, value=dec['description'])
         
         # Ajouter une ligne de total
         total_row = len(decaissements) + 2
-        ws.cell(row=total_row, column=4, value="TOTAL")
-        ws.cell(row=total_row, column=4).font = Font(bold=True)
+        ws.cell(row=total_row, column=3, value="TOTAL")
+        ws.cell(row=total_row, column=3).font = Font(bold=True)
         total_montant = sum(dec['montant'] for dec in decaissements)
-        ws.cell(row=total_row, column=5, value=total_montant)
-        ws.cell(row=total_row, column=5).font = Font(bold=True)
+        ws.cell(row=total_row, column=4, value=total_montant)
+        ws.cell(row=total_row, column=4).font = Font(bold=True)
         
         # Ajuster la largeur des colonnes
-        for col in range(1, 8):
+        for col in range(1, 6):
             ws.column_dimensions[get_column_letter(col)].width = 20
         
         # Préparer la réponse
@@ -782,6 +687,203 @@ class DecaissementsExportView(APIView):
         
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
+        
+        return response
+
+
+class DecaissementsExportPDFView(APIView):
+    """
+    Vue pour exporter les décaissements en PDF
+    """
+    
+    def get(self, request):
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from io import BytesIO
+        
+        user = request.user
+        
+        # Récupérer les paramètres de filtre
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        store_id = request.query_params.get('store')
+        
+        # Validation des dates
+        if start_date and end_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d').date()
+                end = datetime.strptime(end_date, '%Y-%m-%d').date()
+                if start > end:
+                    return Response(
+                        {'error': 'La date de début ne peut pas être supérieure à la date de fin'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            except ValueError:
+                return Response(
+                    {'error': 'Format de date invalide. Utilisez YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        decaissements = []
+        
+        # Récupérer tous les mouvements de caisse de type "out" avec catégorie "bank_deposit"
+        cash_movements = CashMovement.objects.filter(
+            movement_type='out',
+            category='bank_deposit'
+        ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store').order_by('created_at')
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    cash_movements = cash_movements.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    cash_movements = cash_movements.filter(created_by=user)
+            else:
+                cash_movements = cash_movements.filter(created_by=user)
+        
+        if start_date:
+            cash_movements = cash_movements.filter(created_at__date__gte=start_date)
+        if end_date:
+            cash_movements = cash_movements.filter(created_at__date__lte=end_date)
+        if store_id:
+            cash_movements = cash_movements.filter(cashbox_session__cashbox__store_id=store_id)
+        
+        for movement in cash_movements:
+            decaissements.append({
+                'code': movement.movement_number,
+                'type': 'Approvisionnement Bancaire',
+                'date': movement.created_at.date(),
+                'montant': float(movement.amount),
+                'description': movement.description,
+                'store': movement.cashbox_session.cashbox.store.name if movement.cashbox_session and movement.cashbox_session.cashbox else 'N/A',
+            })
+        
+        # Créer le PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=40, leftMargin=40, topMargin=30, bottomMargin=30)
+        elements = []
+        
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#1a1a1a'),
+            spaceAfter=5,
+            fontName='Helvetica-Bold',
+            alignment=1
+        )
+        subtitle_style = ParagraphStyle(
+            'Subtitle',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.HexColor('#6b7280'),
+            spaceAfter=20,
+            alignment=1
+        )
+        
+        # En-tête
+        period = ''
+        if start_date and end_date:
+            period = f"Période: {datetime.strptime(start_date, '%Y-%m-%d').strftime('%d/%m/%Y')} - {datetime.strptime(end_date, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+        elif start_date:
+            period = f"Depuis le {datetime.strptime(start_date, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+        elif end_date:
+            period = f"Jusqu'au {datetime.strptime(end_date, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+        
+        elements.append(Paragraph("Liste des Décaissements", title_style))
+        if period:
+            elements.append(Paragraph(period, subtitle_style))
+        elements.append(Spacer(1, 20))
+        
+        # Tableau des données
+        data = [['Code', 'Type', 'Date', 'Point de Vente', 'Montant (FCFA)', 'Description']]
+        
+        for dec in decaissements:
+            data.append([
+                dec['code'],
+                dec['type'],
+                dec['date'].strftime('%d/%m/%Y'),
+                dec['store'],
+                f"{dec['montant']:,.0f}",
+                dec['description'][:50] + '...' if len(dec['description']) > 50 else dec['description']
+            ])
+        
+        # Ligne de total
+        total_montant = sum(dec['montant'] for dec in decaissements)
+        data.append(['', '', '', 'TOTAL', f"{total_montant:,.0f}", ''])
+        
+        # Créer le tableau
+        table = Table(data, colWidths=[80, 140, 70, 100, 90, 240])
+        table.setStyle(TableStyle([
+            # En-tête
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5932EA')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('TOPPADDING', (0, 0), (-1, 0), 12),
+            
+            # Corps du tableau
+            ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -2), colors.HexColor('#1a1a1a')),
+            ('ALIGN', (0, 1), (0, -2), 'LEFT'),
+            ('ALIGN', (1, 1), (3, -2), 'LEFT'),
+            ('ALIGN', (4, 1), (4, -2), 'RIGHT'),
+            ('ALIGN', (5, 1), (5, -2), 'LEFT'),
+            ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -2), 9),
+            ('TOPPADDING', (0, 1), (-1, -2), 8),
+            ('BOTTOMPADDING', (0, 1), (-1, -2), 8),
+            ('GRID', (0, 0), (-1, -2), 0.5, colors.HexColor('#e5e7eb')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f9fafb')]),
+            
+            # Ligne de total
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f3f4f6')),
+            ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#1a1a1a')),
+            ('ALIGN', (3, -1), (3, -1), 'RIGHT'),
+            ('ALIGN', (4, -1), (4, -1), 'RIGHT'),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, -1), (-1, -1), 11),
+            ('TOPPADDING', (0, -1), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, -1), (-1, -1), 10),
+            ('LINEABOVE', (0, -1), (-1, -1), 2, colors.HexColor('#5932EA')),
+        ]))
+        
+        elements.append(table)
+        elements.append(Spacer(1, 20))
+        
+        # Pied de page
+        footer_text = Paragraph(
+            f"<para align='center'><font size='8' color='#9ca3af'>Document généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} - Total: {len(decaissements)} décaissement(s)</font></para>",
+            styles['Normal']
+        )
+        elements.append(footer_text)
+        
+        # Construire le PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Préparer la réponse
+        response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+        
+        # Nom du fichier
+        filename = 'decaissements'
+        if start_date and end_date:
+            filename += f'_{start_date}_au_{end_date}'
+        elif start_date:
+            filename += f'_depuis_{start_date}'
+        elif end_date:
+            filename += f'_jusquau_{end_date}'
+        filename += '.pdf'
+        
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         
         return response
 

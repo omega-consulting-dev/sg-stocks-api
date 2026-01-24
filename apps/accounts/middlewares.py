@@ -150,25 +150,11 @@ class LoginLogoutMiddleware(TenantMiddlewareMixin):
         if not self.is_tenant_schema(request):
             return self.get_response(request)
         
+        # Ne pas traiter les requêtes de login pour éviter les timeouts
+        # Les logs de connexion sont gérés par le signal post_save du User ou dans la vue de login
+        if request.path.endswith('/login/') and request.method == 'POST':
+            return self.get_response(request)
+        
         response = self.get_response(request)
         
-        # Détecter les connexions
-        if hasattr(request, 'user') and request.user.is_authenticated:
-            if request.path.endswith('/login/') and request.method == 'POST':
-                if response.status_code == 200:
-                    self.log_login(request)
-        
         return response
-    
-    def log_login(self, request):
-        """Enregistrer une connexion."""
-        try:
-            UserActivity.objects.create(
-                user=request.user,
-                action='login',
-                module='auth',
-                description=f"Connexion réussie depuis {UserSessionMiddleware.get_client_ip(request)}",
-                ip_address=UserSessionMiddleware.get_client_ip(request)
-            )
-        except Exception as e:
-            print(f"Error logging login: {e}")

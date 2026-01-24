@@ -154,6 +154,22 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         paid_amount = validated_data.pop('paid_amount', 0)
         customer = validated_data.get('customer')
         
+        # Si aucun client n'est fourni, créer ou récupérer un client "Client No Name"
+        if not customer:
+            from apps.customers.models import Customer
+            customer, created = Customer.objects.get_or_create(
+                customer_code='CLI00001',
+                defaults={
+                    'name': 'Client No Name',
+                    'phone': '',
+                    'email': '',
+                    'address': 'N/A',
+                    'city': 'N/A',
+                    'country': 'Cameroun'
+                }
+            )
+            validated_data['customer'] = customer
+        
         # Generate sale number and create sale - thread-safe method
         from django.utils import timezone
         from decimal import Decimal

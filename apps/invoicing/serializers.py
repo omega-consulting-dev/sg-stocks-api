@@ -26,14 +26,15 @@ class InvoicePaymentSerializer(serializers.ModelSerializer):
     """Serializer for InvoicePayment model."""
     
     payment_number = serializers.CharField(required=False, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
     
     class Meta:
         model = InvoicePayment
         fields = [
             'id', 'payment_number', 'invoice', 'payment_date', 'amount',
-            'payment_method', 'reference', 'notes', 'created_at'
+            'payment_method', 'status', 'status_display', 'reference', 'notes', 'created_at'
         ]
-        read_only_fields = ['payment_number', 'created_at']
+        read_only_fields = ['payment_number', 'status_display', 'created_at']
 
 
 class InvoiceListSerializer(serializers.ModelSerializer):

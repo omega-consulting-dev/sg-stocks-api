@@ -55,7 +55,7 @@ class Expense(AuditModel):
     
     # Expense details
     expense_date = models.DateField(verbose_name="Date de dépense")
-    description = models.TextField(verbose_name="Description")
+    description = models.TextField(blank=True, verbose_name="Description")
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -64,7 +64,7 @@ class Expense(AuditModel):
     )
     
     # Beneficiary
-    beneficiary = models.CharField(max_length=200, verbose_name="Bénéficiaire")
+    beneficiary = models.CharField(max_length=200, blank=True, verbose_name="Bénéficiaire")
     
     # Payment
     PAYMENT_METHOD_CHOICES = [

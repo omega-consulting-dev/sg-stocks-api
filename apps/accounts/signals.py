@@ -90,11 +90,28 @@ def generate_codes(sender, instance, **kwargs):
     """
     Générer automatiquement le matricule employé si non fourni.
     """
-    # Générer le matricule employé s'il n'a pas de matricule
-    if not instance.employee_id:
-        # Compter les employés existants
-        count = User.objects.count() + 1
-        instance.employee_id = f"EMP{count:05d}"
+    # Générer le matricule employé uniquement pour les nouveaux utilisateurs
+    if not instance.pk and not instance.employee_id:
+        # Trouver le prochain numéro disponible
+        from django.db.models import Max
+        import re
+        
+        # Récupérer le plus grand employee_id existant
+        max_employee = User.objects.filter(
+            employee_id__startswith='EMP'
+        ).aggregate(Max('employee_id'))['employee_id__max']
+        
+        if max_employee:
+            # Extraire le numéro du matricule (ex: EMP00004 -> 4)
+            match = re.search(r'EMP(\d+)', max_employee)
+            if match:
+                next_num = int(match.group(1)) + 1
+            else:
+                next_num = 1
+        else:
+            next_num = 1
+        
+        instance.employee_id = f"EMP{next_num:05d}"
 
 
 @receiver(post_save, sender=User)

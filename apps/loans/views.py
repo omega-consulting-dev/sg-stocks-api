@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from decimal import Decimal
 from core.utils.export_utils import ExcelExporter
 from apps.loans.models import Loan, LoanPayment, LoanSchedule
 from apps.loans.serializers import (
@@ -44,7 +45,7 @@ class LoanViewSet(viewsets.ModelViewSet):
     def make_payment(self, request, pk=None):
         """Record a loan payment."""
         loan = self.get_object()
-        amount = request.data.get('amount')
+        amount = Decimal(str(request.data.get('amount')))
         payment_method = request.data.get('payment_method')
         
         # Create payment
@@ -84,6 +85,14 @@ class LoanViewSet(viewsets.ModelViewSet):
         
         serializer = LoanPaymentSerializer(payment)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'])
+    def payment_history(self, request, pk=None):
+        """Get payment history for a loan."""
+        loan = self.get_object()
+        payments = LoanPayment.objects.filter(loan=loan).order_by('-payment_date')
+        serializer = LoanPaymentSerializer(payments, many=True)
+        return Response(serializer.data)
 
 
 class LoanPaymentViewSet(viewsets.ReadOnlyModelViewSet):

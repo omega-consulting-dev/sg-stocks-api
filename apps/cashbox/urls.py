@@ -9,6 +9,7 @@ from apps.cashbox.views import (
     CaisseSoldeView,
     DecaissementsListView,
     DecaissementsExportView,
+    DecaissementsExportPDFView,
     StoreListView,
 )
 
@@ -24,5 +25,6 @@ urlpatterns = [
     path('caisse/solde/', CaisseSoldeView.as_view(), name='caisse-solde'),
     path('decaissements/', DecaissementsListView.as_view(), name='decaissements-list'),
     path('decaissements/export/', DecaissementsExportView.as_view(), name='decaissements-export'),
+    path('decaissements/export-pdf/', DecaissementsExportPDFView.as_view(), name='decaissements-export-pdf'),
     path('', include(router.urls)),
 ]

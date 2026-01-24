@@ -65,7 +65,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
             
             # Magasinier: fournisseurs des stores assignés
             elif user.role.access_scope == 'assigned':
-                from apps.purchases.models import PurchaseOrder
+                from apps.suppliers.models import PurchaseOrder
                 assigned_stores = user.assigned_stores.all()
                 
                 if not assigned_stores.exists():
@@ -84,7 +84,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
             
             # Caissier: uniquement fournisseurs créés par lui ou avec qui il a fait des transactions
             elif user.role.access_scope == 'own':
-                from apps.purchases.models import PurchaseOrder
+                from apps.suppliers.models import PurchaseOrder
                 
                 # Fournisseurs des commandes créées par le caissier
                 supplier_ids_from_po = PurchaseOrder.objects.filter(

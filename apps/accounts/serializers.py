@@ -24,13 +24,13 @@ class LoginSerializer(TokenObtainPairSerializer):
             # Optimisation: select_related pour charger le rôle en une seule requête
             from apps.accounts.models import User
             try:
-                user_with_role = User.objects.select_related('role').get(email=email, is_active=True)
+                user_with_role = User.objects.select_related('role').prefetch_related('assigned_stores').get(email=email, is_active=True)
             except User.DoesNotExist:
-                user_with_role = None
+                raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
             
             user = authenticate(request=self.context.get('request'), email=email, password=password)
 
-            if not user or not user_with_role:
+            if not user:
                 raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
             
             # Remplacer user par la version optimisée avec role déjà chargé
@@ -41,22 +41,15 @@ class LoginSerializer(TokenObtainPairSerializer):
             
             try:
                 tenant = connection.tenant
-                logger.info(f"Verification suspension pour tenant: {tenant.schema_name if tenant else 'None'}")
                 
-                if tenant and hasattr(tenant, 'is_suspended'):
-                    logger.info(f"   is_suspended = {tenant.is_suspended}")
-                    
-                    if tenant.is_suspended:
-                        reason = tenant.suspension_reason or "Votre compte a été suspendu."
-                        logger.warning(f"Tentative de connexion refusee - Compte suspendu: {tenant.schema_name}")
-                        raise serializers.ValidationError({
-                            "detail": f"Accès refusé - Compte suspendu. {reason} Contactez l'administrateur pour plus d'informations."
-                        })
-                else:
-                    logger.info(f"   Pas de vérification de suspension (schema public ou tenant sans is_suspended)")
+                if tenant and hasattr(tenant, 'is_suspended') and tenant.is_suspended:
+                    reason = tenant.suspension_reason or "Votre compte a été suspendu."
+                    logger.warning(f"Tentative de connexion refusee - Compte suspendu: {tenant.schema_name}")
+                    raise serializers.ValidationError({
+                        "detail": f"Accès refusé - Compte suspendu. {reason} Contactez l'administrateur pour plus d'informations."
+                    })
             except AttributeError:
-                # Pas de tenant (schéma public probablement)
-                logger.info("   Pas de tenant disponible (schema public)")
+                # Pas de tenant (schéma public)
                 pass
 
         else:
@@ -182,7 +175,8 @@ class UserListSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
-            'display_name', 'phone', 'avatar', 'role_name',
+            'display_name', 'phone', 'avatar', 'employee_id',
+            'role', 'role_name', 'assigned_stores',
             'is_active', 'is_staff', 'is_superuser', 'last_login', 'date_joined'
         ]
 
@@ -309,6 +303,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for user update."""
+    
+    employee_id = serializers.CharField(read_only=True)
     
     class Meta:
         model = User

@@ -16,13 +16,21 @@ class LoanScheduleSerializer(serializers.ModelSerializer):
 
 
 class LoanPaymentSerializer(serializers.ModelSerializer):
+    payment_method_display = serializers.CharField(source='get_payment_method_display', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = LoanPayment
         fields = [
             'id', 'payment_number', 'loan', 'payment_date', 'amount',
-            'principal_amount', 'interest_amount', 'payment_method',
-            'reference', 'notes', 'created_at'
+            'principal_amount', 'interest_amount', 'payment_method', 'payment_method_display',
+            'reference', 'notes', 'created_by_name', 'created_at'
         ]
+    
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
 
 
 class LoanListSerializer(serializers.ModelSerializer):

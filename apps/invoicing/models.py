@@ -417,6 +417,18 @@ class InvoicePayment(AuditModel):
         verbose_name="Mode de paiement"
     )
     
+    STATUS_CHOICES = [
+        ('success', 'Réussi'),
+        ('failed', 'Échoué'),
+        ('pending', 'En attente'),
+    ]
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='success',
+        verbose_name="Statut"
+    )
+    
     reference = models.CharField(max_length=100, blank=True, verbose_name="Référence")
     notes = models.TextField(blank=True, verbose_name="Notes")
     

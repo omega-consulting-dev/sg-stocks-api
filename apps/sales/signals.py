@@ -20,12 +20,8 @@ def auto_generate_invoice_on_confirmation(sender, instance, created, **kwargs):
         try:
             # Try to access the invoice relation
             existing_invoice = instance.invoice
-            logger.info(f"Sale {instance.id} already has invoice {existing_invoice.id} - Updating it")
-            # Update existing invoice with new sale data
-            from apps.invoicing.models import Invoice
-            Invoice.update_from_sale(existing_invoice, instance)
-            logger.info(f"Invoice {existing_invoice.id} updated successfully")
-            return
+            logger.info(f"Sale {instance.id} already has invoice {existing_invoice.id} - Skipping invoice creation")
+            return  # Invoice already exists, skip creation
         except Exception:
             # Invoice doesn't exist, create it
             pass
@@ -38,6 +34,12 @@ def auto_generate_invoice_on_confirmation(sender, instance, created, **kwargs):
                 logger.info(f"Invoice {invoice.id} created successfully for sale {instance.id}")
             else:
                 logger.error(f"Invoice.generate_from_sale returned None for sale {instance.id}")
+        except ValueError as e:
+            # Invoice already exists - this is OK, just log and continue
+            if "already exists" in str(e):
+                logger.info(f"Invoice already exists for sale {instance.id} - Skipping creation")
+            else:
+                logger.error(f"ValueError while creating invoice for sale {instance.id}: {str(e)}")
         except Exception as e:
             # Log error but don't break the save
             logger.error(f"Failed to auto-generate invoice for sale {instance.id}: {str(e)}")

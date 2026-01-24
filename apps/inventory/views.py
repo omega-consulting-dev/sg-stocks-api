@@ -842,10 +842,10 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
         
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "Mouvements"
+        ws.title = "Mouvements Sorties"
         
         columns = [
-            'Date', 'Désignation', 'Entrées', 'Sorties', 'Stocks final'
+            'Date', 'Produit', 'Type', 'Quantité', 'Magasin', 'Référence'
         ]
         
         # Style header
@@ -859,36 +859,36 @@ class StockMovementViewSet(StoreAccessMixin, UserStoreValidationMixin, viewsets.
             cell.font = header_font
             cell.alignment = Alignment(horizontal='center', vertical='center')
         
-        # Sort movements by date (oldest first) for progressive stock calculation
-        movements_list = list(movements.order_by('created_at'))
+        # Sort movements by date (oldest first)
+        movements_list = list(movements.order_by('date', 'created_at'))
         
-        # Calculate progressive stock
-        stock_cumulatif = 0
+        # Movement type mapping
+        movement_type_map = {
+            'in': 'Entrée',
+            'out': 'Sortie',
+            'transfer': 'Transfert',
+            'adjustment': 'Ajustement',
+            'return': 'Retour'
+        }
         
         # Add data
         for row_num, movement in enumerate(movements_list, 2):
-            entrees = ''
-            sorties = ''
-            
-            if movement.movement_type == 'in':
-                entrees = float(movement.quantity)
-                stock_cumulatif += entrees
-            elif movement.movement_type == 'out':
-                sorties = float(movement.quantity)
-                stock_cumulatif -= sorties
-            
-            ws.cell(row=row_num, column=1, value=movement.created_at.strftime('%d/%m/%Y'))
-            ws.cell(row=row_num, column=2, value=movement.product.name)
-            ws.cell(row=row_num, column=3, value=entrees)
-            ws.cell(row=row_num, column=4, value=sorties)
-            ws.cell(row=row_num, column=5, value=stock_cumulatif)
+            # Use 'date' field if available, otherwise fallback to 'created_at'
+            movement_date = movement.date if movement.date else movement.created_at.date()
+            ws.cell(row=row_num, column=1, value=movement_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=2, value=movement.product.name if movement.product else '')
+            ws.cell(row=row_num, column=3, value=movement_type_map.get(movement.movement_type, movement.movement_type))
+            ws.cell(row=row_num, column=4, value=float(movement.quantity))
+            ws.cell(row=row_num, column=5, value=movement.store.name if movement.store else '')
+            ws.cell(row=row_num, column=6, value=movement.reference or '')
         
         # Auto adjust columns
-        ws.column_dimensions['A'].width = 15
-        ws.column_dimensions['B'].width = 35
-        ws.column_dimensions['C'].width = 12
-        ws.column_dimensions['D'].width = 12
-        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['A'].width = 15  # Date
+        ws.column_dimensions['B'].width = 35  # Produit
+        ws.column_dimensions['C'].width = 15  # Type
+        ws.column_dimensions['D'].width = 12  # Quantité
+        ws.column_dimensions['E'].width = 20  # Magasin
+        ws.column_dimensions['F'].width = 25  # Référence
         
         # Generate response
         response = HttpResponse(content_type='application/vnd.ms-excel')

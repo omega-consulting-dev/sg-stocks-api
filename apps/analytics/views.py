@@ -489,26 +489,34 @@ class DashboardViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['get'], url_path='reporting-stats')
     def reporting_stats(self, request):
-        """Get statistics for reporting page."""
-        from apps.invoicing.models import Invoice
+        """Get statistics for reporting page - Encaissements réels."""
+        from apps.invoicing.models import Invoice, InvoicePayment
         
-        # Total invoices
-        total_invoices = Invoice.objects.filter(status='paid').count()
+        # Total factures émises
+        total_invoices = Invoice.objects.count()
         
         # Total expenses (paid and approved)
         total_expenses = Expense.objects.filter(
             Q(status='paid') | Q(status='approved')
         ).aggregate(total=Sum('amount'))['total'] or 0
         
-        # Total sales
-        total_sales = Sale.objects.filter(
-            status='confirmed'
-        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        # Total ENCAISSEMENTS (argent réellement reçu)
+        # 1. Paiements de factures
+        total_invoice_payments = InvoicePayment.objects.filter(
+            status='success'
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        
+        # 2. Montants payés des ventes directes
+        total_sales_paid = Sale.objects.filter(
+            status__in=['confirmed', 'completed']
+        ).aggregate(total=Sum('paid_amount'))['total'] or 0
+        
+        total_sales = float(total_invoice_payments or 0) + float(total_sales_paid or 0)
         
         return Response({
             'total_invoices': total_invoices,
             'total_expenses': float(total_expenses),
-            'total_sales': float(total_sales)
+            'total_sales': total_sales
         })
     
     @action(detail=False, methods=['get'], url_path='generate-report-data')
@@ -535,41 +543,121 @@ class DashboardViewSet(viewsets.ViewSet):
             status__in=['paid', 'approved']
         ).select_related('category').order_by('expense_date')
         
-        expenses_data = []
+        # Regrouper les charges par catégorie
+        expenses_by_category = {}
         for exp in expenses:
-            expenses_data.append({
-                'reference': exp.reference if hasattr(exp, 'reference') else f"EXP-{exp.id}",
-                'description': exp.description or '',
-                'category_name': exp.category.name if exp.category else 'Divers',
-                'amount': float(exp.amount),
-                'expense_date': exp.expense_date.strftime('%d/%m/%Y')
-            })
+            category_name = exp.category.name if exp.category else 'Divers'
+            
+            if category_name not in expenses_by_category:
+                expenses_by_category[category_name] = {'total': 0, 'count': 0}
+            
+            expenses_by_category[category_name]['total'] += float(exp.amount)
+            expenses_by_category[category_name]['count'] += 1
         
-        # Récupérer les ventes
+        # Ajouter les emprunts comme charges
+        from apps.loans.models import Loan
+        loans = Loan.objects.filter(
+            start_date__gte=start_date,
+            start_date__lte=end_date,
+            status__in=['active', 'paid']
+        ).order_by('start_date')
+        
+        if loans.exists():
+            if 'Emprunts' not in expenses_by_category:
+                expenses_by_category['Emprunts'] = {'total': 0, 'count': 0}
+            
+            for loan in loans:
+                expenses_by_category['Emprunts']['total'] += float(loan.total_amount)
+                expenses_by_category['Emprunts']['count'] += 1
+        
+        # Convertir en liste
+        expenses_data = [
+            {
+                'category_name': category,
+                'amount': data['total'],
+                'count': data['count']
+            }
+            for category, data in expenses_by_category.items()
+        ]
+        
+        # Récupérer les ENCAISSEMENTS RÉELS (pas le CA)
+        # 1. Paiements de factures
+        from apps.invoicing.models import InvoicePayment
+        invoice_payments = InvoicePayment.objects.filter(
+            payment_date__gte=start_date,
+            payment_date__lte=end_date,
+            status='success'
+        ).select_related('invoice', 'invoice__customer').order_by('payment_date')
+        
+        # 2. Ventes avec montant payé
         sales = Sale.objects.filter(
             sale_date__gte=start_date,
             sale_date__lte=end_date,
-            status='confirmed'
+            status__in=['confirmed', 'completed'],
+            paid_amount__gt=0
         ).select_related('customer').order_by('sale_date')
         
-        sales_data = []
+        # Regrouper les ventes par catégorie
+        sales_by_category = {}
+        
+        # Ajouter les paiements de factures
+        for payment in invoice_payments:
+            # Parcourir TOUTES les lignes de la facture pour extraire les catégories
+            if hasattr(payment.invoice, 'lines'):
+                for line in payment.invoice.lines.all():
+                    category_name = 'Ventes diverses'
+                    line_amount = float(line.total) if hasattr(line, 'total') else 0
+                    
+                    if hasattr(line, 'product') and line.product:
+                        if hasattr(line.product, 'category') and line.product.category:
+                            category_name = line.product.category.name
+                    elif hasattr(line, 'service') and line.service:
+                        if hasattr(line.service, 'category') and line.service.category:
+                            category_name = line.service.category.name
+                    
+                    if category_name not in sales_by_category:
+                        sales_by_category[category_name] = 0
+                    
+                    # Calculer la proportion de ce produit/service dans la facture
+                    invoice_total = float(payment.invoice.total_amount)
+                    proportion = line_amount / invoice_total if invoice_total > 0 else 0
+                    amount_to_add = float(payment.amount) * proportion
+                    
+                    sales_by_category[category_name] += amount_to_add
+        
+        # Ajouter les ventes directes (montant payé)
         for sale in sales:
-            # Get product name from sale items
-            product_names = []
-            if hasattr(sale, 'items'):
-                for item in sale.items.all()[:3]:  # Limiter à 3 produits
-                    if hasattr(item, 'product') and item.product:
-                        product_names.append(item.product.name)
-            
-            product_display = ', '.join(product_names) if product_names else 'Vente'
-            
-            sales_data.append({
-                'sale_number': sale.sale_number if hasattr(sale, 'sale_number') else f"VNT-{sale.id}",
-                'product_name': product_display,
-                'description': f"Vente {sale.customer.name if sale.customer else 'client'}",
-                'total_amount': float(sale.total_amount),
-                'sale_date': sale.sale_date.strftime('%d/%m/%Y')
-            })
+            # Parcourir TOUTES les lignes de la vente
+            if hasattr(sale, 'lines'):
+                for line in sale.lines.all():
+                    category_name = 'Ventes diverses'
+                    line_total = float(line.quantity) * float(line.unit_price)
+                    
+                    if hasattr(line, 'product') and line.product:
+                        if hasattr(line.product, 'category') and line.product.category:
+                            category_name = line.product.category.name
+                    elif hasattr(line, 'service') and line.service:
+                        if hasattr(line.service, 'category') and line.service.category:
+                            category_name = line.service.category.name
+                    
+                    if category_name not in sales_by_category:
+                        sales_by_category[category_name] = 0
+                    
+                    # Calculer la proportion de ce produit/service dans la vente
+                    sale_total = float(sale.total_amount)
+                    proportion = line_total / sale_total if sale_total > 0 else 0
+                    amount_to_add = float(sale.paid_amount) * proportion
+                    
+                    sales_by_category[category_name] += amount_to_add
+        
+        # Convertir en liste pour le frontend
+        sales_data = [
+            {
+                'category_name': category,
+                'amount': total
+            }
+            for category, total in sales_by_category.items()
+        ]
         
         return Response({
             'expenses': expenses_data,
@@ -614,33 +702,101 @@ class DashboardViewSet(viewsets.ViewSet):
             expenses_by_category[category_name]['count'] += 1
             total_expenses += amount
         
-        # Récupérer les ventes
+        # Ajouter les emprunts comme charges
+        from apps.loans.models import Loan
+        loans = Loan.objects.filter(
+            start_date__gte=start_date,
+            start_date__lte=end_date,
+            status__in=['active', 'paid']
+        )
+        
+        if loans.exists():
+            if 'Emprunts' not in expenses_by_category:
+                expenses_by_category['Emprunts'] = {'amount': 0, 'count': 0}
+            
+            for loan in loans:
+                loan_amount = float(loan.total_amount)
+                expenses_by_category['Emprunts']['amount'] += loan_amount
+                expenses_by_category['Emprunts']['count'] += 1
+                total_expenses += loan_amount
+        
+        # Récupérer les ENCAISSEMENTS RÉELS (même logique que generate-report-data)
+        from apps.invoicing.models import InvoicePayment
+        
+        # Grouper les ventes par catégorie de produit/service
+        sales_by_category = {}
+        total_sales = 0
+        
+        # 1. Paiements de factures
+        invoice_payments = InvoicePayment.objects.filter(
+            payment_date__gte=start_date,
+            payment_date__lte=end_date,
+            status='success'
+        ).select_related('invoice').prefetch_related('invoice__lines__product__category', 'invoice__lines__service__category')
+        
+        for payment in invoice_payments:
+            total_sales += float(payment.amount)
+            
+            # Parcourir TOUTES les lignes de la facture pour extraire les catégories
+            if hasattr(payment.invoice, 'lines'):
+                for line in payment.invoice.lines.all():
+                    category_name = 'Ventes diverses'
+                    line_amount = float(line.total) if hasattr(line, 'total') else 0
+                    
+                    # Récupérer la catégorie du produit ou du service
+                    if hasattr(line, 'product') and line.product:
+                        if hasattr(line.product, 'category') and line.product.category:
+                            category_name = line.product.category.name
+                    elif hasattr(line, 'service') and line.service:
+                        if hasattr(line.service, 'category') and line.service.category:
+                            category_name = line.service.category.name
+                    
+                    if category_name not in sales_by_category:
+                        sales_by_category[category_name] = {'amount': 0, 'count': 0}
+                    
+                    # Calculer la proportion de ce produit/service dans la facture
+                    invoice_total = float(payment.invoice.total_amount)
+                    proportion = line_amount / invoice_total if invoice_total > 0 else 0
+                    amount_to_add = float(payment.amount) * proportion
+                    
+                    sales_by_category[category_name]['amount'] += amount_to_add
+                    sales_by_category[category_name]['count'] += 1
+        
+        # 2. Ventes directes avec montant payé
         sales = Sale.objects.filter(
             sale_date__gte=start_date,
             sale_date__lte=end_date,
-            status='confirmed'
-        ).prefetch_related('items__product')
+            status__in=['confirmed', 'completed'],
+            paid_amount__gt=0
+        ).prefetch_related('lines__product__category', 'lines__service__category')
         
-        # Grouper les ventes par catégorie de produit
-        sales_by_category = {}
-        total_sales = 0
         for sale in sales:
-            amount = float(sale.total_amount)
-            total_sales += amount
+            total_sales += float(sale.paid_amount)
             
-            # Obtenir la catégorie du premier produit de la vente
-            category_name = 'Ventes'
-            if hasattr(sale, 'items'):
-                for item in sale.items.all():
-                    if hasattr(item, 'product') and item.product:
-                        if hasattr(item.product, 'category') and item.product.category:
-                            category_name = item.product.category.name
-                        break
-            
-            if category_name not in sales_by_category:
-                sales_by_category[category_name] = {'amount': 0, 'count': 0}
-            sales_by_category[category_name]['amount'] += amount
-            sales_by_category[category_name]['count'] += 1
+            # Parcourir TOUTES les lignes de la vente pour extraire les catégories
+            if hasattr(sale, 'lines'):
+                for line in sale.lines.all():
+                    category_name = 'Ventes diverses'
+                    line_total = float(line.quantity) * float(line.unit_price)
+                    
+                    # Récupérer la catégorie du produit ou du service
+                    if hasattr(line, 'product') and line.product:
+                        if hasattr(line.product, 'category') and line.product.category:
+                            category_name = line.product.category.name
+                    elif hasattr(line, 'service') and line.service:
+                        if hasattr(line.service, 'category') and line.service.category:
+                            category_name = line.service.category.name
+                    
+                    if category_name not in sales_by_category:
+                        sales_by_category[category_name] = {'amount': 0, 'count': 0}
+                    
+                    # Calculer la proportion de ce produit/service dans la vente
+                    sale_total = float(sale.total_amount)
+                    proportion = line_total / sale_total if sale_total > 0 else 0
+                    amount_to_add = float(sale.paid_amount) * proportion
+                    
+                    sales_by_category[category_name]['amount'] += amount_to_add
+                    sales_by_category[category_name]['count'] += 1
         
         # Calculer le résultat
         net_profit = total_sales - total_expenses
@@ -748,18 +904,17 @@ class DashboardViewSet(viewsets.ViewSet):
             
             # Tableau des Ventes groupées par catégorie
             elements.append(Paragraph("PRODUITS D'EXPLOITATION", section_style))
-            sales_data = [['Catégorie', 'Qté', 'Montant']]
+            sales_data = [['Catégorie', 'Montant']]
             for category, data in sorted(sales_by_category.items()):
-                sales_data.append([category, str(data['count']), f"{data['amount']:,.0f}"])
-            sales_data.append(['TOTAL PRODUITS', '', f"{total_sales:,.0f}"])
+                sales_data.append([category, f"{data['amount']:,.0f}"])
+            sales_data.append(['TOTAL PRODUITS', f"{total_sales:,.0f}"])
             
-            sales_table = Table(sales_data, colWidths=[440, 100, 150])
+            sales_table = Table(sales_data, colWidths=[540, 150])
             sales_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.white),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#6b7280')),
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-                ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 8),
                 ('FONTSIZE', (0, 1), (-1, -2), 9),
@@ -780,18 +935,17 @@ class DashboardViewSet(viewsets.ViewSet):
             
             # Tableau des Charges groupées par catégorie
             elements.append(Paragraph("CHARGES D'EXPLOITATION", section_style))
-            expenses_data = [['Catégorie', 'Qté', 'Montant']]
+            expenses_data = [['Catégorie', 'Montant']]
             for category, data in sorted(expenses_by_category.items()):
-                expenses_data.append([category, str(data['count']), f"{data['amount']:,.0f}"])
-            expenses_data.append(['TOTAL CHARGES', '', f"{total_expenses:,.0f}"])
+                expenses_data.append([category, f"{data['amount']:,.0f}"])
+            expenses_data.append(['TOTAL CHARGES', f"{total_expenses:,.0f}"])
             
-            expenses_table = Table(expenses_data, colWidths=[440, 100, 150])
+            expenses_table = Table(expenses_data, colWidths=[540, 150])
             expenses_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.white),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#6b7280')),
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-                ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 8),
                 ('FONTSIZE', (0, 1), (-1, -2), 9),
@@ -880,13 +1034,13 @@ class DashboardViewSet(viewsets.ViewSet):
             # Charges
             ws.merge_cells(f'A{row}:C{row}')
             cell = ws[f'A{row}']
-            cell.value = "Charges"
+            cell.value = "Charges d'exploitation"
             cell.font = header_font
             cell.fill = header_fill
             row += 1
             
             # Headers Charges
-            headers_charges = ['Réf', 'Désignation', 'Montant']
+            headers_charges = ['Catégorie', 'Qté', 'Montant']
             for col_idx, header in enumerate(headers_charges, start=1):
                 cell = ws.cell(row=row, column=col_idx)
                 cell.value = header
@@ -896,10 +1050,10 @@ class DashboardViewSet(viewsets.ViewSet):
             row += 1
             
             # Data Charges
-            for exp in expenses_data:
-                ws.cell(row=row, column=1, value=exp[0])
-                ws.cell(row=row, column=2, value=exp[1])
-                ws.cell(row=row, column=3, value=exp[2]).number_format = '#,##0'
+            for category, data in sorted(expenses_by_category.items()):
+                ws.cell(row=row, column=1, value=category)
+                ws.cell(row=row, column=2, value=data['count'])
+                ws.cell(row=row, column=3, value=data['amount']).number_format = '#,##0'
                 row += 1
             
             # Total Charges
@@ -913,13 +1067,13 @@ class DashboardViewSet(viewsets.ViewSet):
             # Ventes
             ws.merge_cells(f'A{row}:C{row}')
             cell = ws[f'A{row}']
-            cell.value = "Ventes"
+            cell.value = "Produits d'exploitation"
             cell.font = header_font
             cell.fill = header_fill
             row += 1
             
             # Headers Ventes
-            headers_ventes = ['Numéro', 'Réf', 'Montant']
+            headers_ventes = ['Catégorie', 'Qté', 'Montant']
             for col_idx, header in enumerate(headers_ventes, start=1):
                 cell = ws.cell(row=row, column=col_idx)
                 cell.value = header
@@ -929,10 +1083,10 @@ class DashboardViewSet(viewsets.ViewSet):
             row += 1
             
             # Data Ventes
-            for sale in sales_data:
-                ws.cell(row=row, column=1, value=sale[0])
-                ws.cell(row=row, column=2, value=sale[1])
-                ws.cell(row=row, column=3, value=sale[2]).number_format = '#,##0'
+            for category, data in sorted(sales_by_category.items()):
+                ws.cell(row=row, column=1, value=category)
+                ws.cell(row=row, column=2, value=data['count'])
+                ws.cell(row=row, column=3, value=data['amount']).number_format = '#,##0'
                 row += 1
             
             # Total Ventes
@@ -968,8 +1122,8 @@ class DashboardViewSet(viewsets.ViewSet):
             row += 1
             
             info_lines = [
-                f"Nombre des charges: {len(expenses_data)}",
-                f"Services des produits: {len(sales_data)}",
+                f"Nombre de catégories de charges: {len(expenses_by_category)}",
+                f"Nombre de catégories de produits: {len(sales_by_category)}",
                 f"Ce rapport est établi pour la période {period}. La période représente un bénéfice de {net_profit:,.0f} FCFA."
             ]
             for info in info_lines:

@@ -14,4 +14,8 @@ Set-Location "d:\projet api sgstock\sg_stocks_api new\sg_stocks_api"
 & .\.venv\Scripts\Activate.ps1
 Write-Host "✅ Environnement virtuel activé" -ForegroundColor Green
 Write-Host "🌐 Démarrage de Daphne sur http://0.0.0.0:8000" -ForegroundColor Cyan
-daphne -b 0.0.0.0 -p 8000 myproject.asgi:application
+# Augmenter les timeouts pour éviter les problèmes de connexion
+# --websocket_timeout: Timeout pour les WebSocket (en secondes)
+# --application-close-timeout: Timeout pour fermer l'application (en secondes)
+# -t: Timeout HTTP (en secondes)
+daphne -b 0.0.0.0 -p 8000 --websocket_timeout 300 --application-close-timeout 60 -t 60 myproject.asgi:application

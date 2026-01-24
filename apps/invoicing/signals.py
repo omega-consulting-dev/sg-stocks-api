@@ -14,9 +14,9 @@ def update_invoice_paid_amount_on_payment_save(sender, instance, created, **kwar
     if kwargs.get('raw', False):
         return
     
-    # Récupérer tous les paiements de cette facture
+    # Récupérer tous les paiements réussis de cette facture
     invoice = instance.invoice
-    total_paid = sum(payment.amount for payment in invoice.payments.all())
+    total_paid = sum(payment.amount for payment in invoice.payments.filter(status='success'))
     
     logger.info(f"Signal: Paiement {'créé' if created else 'modifié'} pour facture {invoice.invoice_number}")
     logger.info(f"Signal: Montant du paiement: {instance.amount}")
@@ -45,9 +45,9 @@ def update_invoice_paid_amount_on_payment_delete(sender, instance, **kwargs):
     """
     Met à jour le montant payé de la facture quand un paiement est supprimé.
     """
-    # Récupérer tous les paiements restants de cette facture
+    # Récupérer tous les paiements réussis restants de cette facture
     invoice = instance.invoice
-    total_paid = sum(payment.amount for payment in invoice.payments.all())
+    total_paid = sum(payment.amount for payment in invoice.payments.filter(status='success'))
     
     # Mettre à jour le montant payé
     if invoice.paid_amount != total_paid:

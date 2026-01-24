@@ -272,25 +272,27 @@ class CustomerViewSet(viewsets.ModelViewSet):
         GET /api/v1/customers/customers/debts/
         Retourne les clients liés à des factures avec un solde non réglé.
         Les données sont automatiquement filtrées par access_scope (own/assigned/all).
+        Exclut les clients par défaut (No Name, CLI00001, CLI00002).
         """
         # Utiliser get_queryset() pour respecter le filtrage par access_scope
         customers = self.get_queryset()
         
+        # Exclure les clients "No Name" et le code CLI00001
+        customers = customers.exclude(
+            Q(name__icontains='No Name') | 
+            Q(customer_code='CLI00001')
+        )
+        
         data = []
         for customer in customers:
-            balance = customer.get_balance()
-            if balance > 0:
-                # Calculer total_invoiced et total_paid
-                invoices = customer.invoices.all()
-                
-                total_invoiced = 0
-                total_paid = 0
-                
-                for invoice in invoices:
-                    invoice_balance = invoice.total_amount - invoice.paid_amount
-                    if invoice_balance > 0:
-                        total_invoiced += invoice.total_amount
-                        total_paid += invoice.paid_amount
+            # Calculer total_invoiced et total_paid pour TOUTES les factures
+            invoices = customer.invoices.all()
+            
+            # Inclure uniquement les clients qui ont au moins une facture
+            if invoices.exists():
+                total_invoiced = sum(invoice.total_amount for invoice in invoices)
+                total_paid = sum(invoice.paid_amount for invoice in invoices)
+                balance = total_invoiced - total_paid
                 
                 data.append({
                     'id': customer.id,
@@ -304,7 +306,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
                     'user_id': customer.user_id if customer.user else None
                 })
         
-        # Trier par balance décroissante
+        # Trier par balance décroissante (dettes non payées en premier)
         data.sort(key=lambda x: x['balance'], reverse=True)
         return Response(data)
     
@@ -317,7 +319,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
         
         payments = InvoicePayment.objects.filter(
             invoice__customer=customer
-        ).select_related('invoice').order_by('payment_date')
+        ).select_related('invoice').order_by('payment_number')
         
         payments_data = []
         for payment in payments:
@@ -329,6 +331,8 @@ class CustomerViewSet(viewsets.ModelViewSet):
                 'amount': float(payment.amount),
                 'payment_method': payment.payment_method,
                 'payment_method_display': payment.get_payment_method_display(),
+                'status': payment.status,
+                'status_display': payment.get_status_display(),
                 'reference': payment.reference,
                 'notes': payment.notes,
             })

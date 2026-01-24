@@ -27,8 +27,8 @@ def delete_saker_tenant():
         print(f"🔍 Tenant trouvé: {saker.name} (schéma: {saker.schema_name})")
         
         # Confirmation
-        confirmation = input("⚠️  ATTENTION: Cette action supprimera TOUTES les données du tenant 'saker'. Continuer? (oui/non): ")
-        if confirmation.lower() != 'oui':
+        confirmation = input("⚠️  ATTENTION: Cette action supprimera TOUTES les données du tenant 'saker'. Continuer? (oui/non): ").strip().lower()
+        if confirmation != 'oui':
             print("❌ Opération annulée.")
             return False
         
