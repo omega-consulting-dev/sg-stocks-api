@@ -175,6 +175,7 @@ class Role(TimeStampedModel):
     can_manage_customers = models.BooleanField(default=False, verbose_name="Gérer les clients")
     can_manage_suppliers = models.BooleanField(default=False, verbose_name="Gérer les fournisseurs")
     can_manage_cashbox = models.BooleanField(default=False, verbose_name="Gérer la caisse")
+    can_manage_bank = models.BooleanField(default=False, verbose_name="Gérer la banque")
     can_manage_loans = models.BooleanField(default=False, verbose_name="Gérer les emprunts")
     can_manage_expenses = models.BooleanField(default=False, verbose_name="Gérer les dépenses")
     can_view_analytics = models.BooleanField(default=False, verbose_name="Voir les analytics")

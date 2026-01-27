@@ -23,16 +23,33 @@ class LoanViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         user = self.request.user
         
+        # Filtrage par rôle
         if user.is_superuser:
-            return queryset
-        
-        if hasattr(user, 'role') and user.role:
+            pass
+        elif hasattr(user, 'role') and user.role:
             if user.role.access_scope == 'all':
-                return queryset
+                pass
+            elif user.role.access_scope == 'assigned':
+                # Voir les emprunts des stores assignés
+                if hasattr(user, 'assigned_stores') and user.assigned_stores.exists():
+                    queryset = queryset.filter(store__in=user.assigned_stores.all())
+                else:
+                    queryset = queryset.filter(created_by=user)
             elif user.role.access_scope == 'own':
-                return queryset.filter(created_by=user)
+                queryset = queryset.filter(created_by=user)
+        else:
+            queryset = queryset.filter(created_by=user)
         
-        return queryset.filter(created_by=user)
+        # Filtrage par date
+        start_date_gte = self.request.query_params.get('start_date__gte')
+        start_date_lte = self.request.query_params.get('start_date__lte')
+        
+        if start_date_gte:
+            queryset = queryset.filter(start_date__gte=start_date_gte)
+        if start_date_lte:
+            queryset = queryset.filter(start_date__lte=start_date_lte)
+        
+        return queryset
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -41,12 +58,54 @@ class LoanViewSet(viewsets.ModelViewSet):
             return LoanCreateSerializer
         return LoanDetailSerializer
     
+    def perform_create(self, serializer):
+        """Définir automatiquement created_by lors de la création"""
+        serializer.save(created_by=self.request.user)
+    
     @action(detail=True, methods=['post'])
     def make_payment(self, request, pk=None):
         """Record a loan payment."""
         loan = self.get_object()
         amount = Decimal(str(request.data.get('amount')))
         payment_method = request.data.get('payment_method')
+        
+        # Utiliser le store de l'emprunt
+        store = loan.store
+        
+        if not store:
+            return Response(
+                {'error': 'L\'emprunt n\'a pas de point de vente associé.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Vérifier le solde disponible selon le mode de paiement
+        if payment_method == 'cash':
+            # Vérifier le solde de la caisse
+            from apps.cashbox.utils import get_cashbox_real_balance
+            
+            available_balance = get_cashbox_real_balance(store_id=store.id)
+            
+            if amount > available_balance:
+                return Response(
+                    {
+                        'error': f'Solde en caisse insuffisant. Solde disponible: {available_balance:,.2f} XAF, Montant demandé: {amount:,.2f} XAF'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        elif payment_method == 'bank_transfer':
+            # Vérifier le solde bancaire
+            from apps.cashbox.utils import get_bank_balance
+            
+            bank_balance = get_bank_balance(store_id=store.id)
+            
+            if amount > bank_balance:
+                return Response(
+                    {
+                        'error': f'Solde bancaire insuffisant. Solde disponible: {bank_balance:,.2f} XAF, Montant demandé: {amount:,.2f} XAF'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         # Create payment
         count = LoanPayment.objects.filter(loan=loan).count() + 1
@@ -58,6 +117,68 @@ class LoanViewSet(viewsets.ModelViewSet):
             payment_method=payment_method,
             created_by=request.user
         )
+        
+        # Gérer les mouvements de caisse selon le mode de paiement
+        if payment_method == 'cash':
+            # Paiement en espèces: créer un mouvement de sortie de caisse
+            from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
+            
+            cashbox, _ = Cashbox.objects.get_or_create(
+                store=store,
+                is_active=True,
+                defaults={
+                    'name': f'Caisse {store.name}',
+                    'code': f'CASH-{store.code}',
+                    'created_by': request.user
+                }
+            )
+            
+            # Récupérer ou créer une session ouverte
+            cashbox_session, _ = CashboxSession.objects.get_or_create(
+                cashbox=cashbox,
+                status='open',
+                defaults={
+                    'cashier': request.user,
+                    'opening_date': timezone.now(),
+                    'opening_balance': 0,
+                    'created_by': request.user
+                }
+            )
+            
+            # Créer le mouvement de sortie de caisse
+            last_movement = CashMovement.objects.order_by('-id').first()
+            if last_movement and last_movement.movement_number:
+                try:
+                    import re
+                    match = re.search(r'\d+', last_movement.movement_number)
+                    if match:
+                        last_number = int(match.group())
+                        movement_count = last_number + 1
+                    else:
+                        movement_count = CashMovement.objects.count() + 1
+                except (ValueError, AttributeError):
+                    movement_count = CashMovement.objects.count() + 1
+            else:
+                movement_count = 1
+            
+            CashMovement.objects.create(
+                movement_number=f'LOAN-{movement_count:05d}',
+                cashbox_session=cashbox_session,
+                movement_type='out',  # Argent sort de la caisse
+                category='loan_payment',
+                amount=amount,
+                payment_method='cash',
+                reference=payment.payment_number,
+                description=f'Remboursement emprunt {loan.loan_number} en espèces',
+                created_by=request.user
+            )
+            
+            # Mettre à jour le solde de la caisse (diminuer)
+            cashbox.current_balance -= amount
+            cashbox.save()
+        
+        # Note: Pour les paiements par virement bancaire, on ne crée PAS de CashMovement
+        # car l'argent sort directement de la banque sans passer par la caisse physique.
         
         # Update loan paid amount
         loan.paid_amount += amount

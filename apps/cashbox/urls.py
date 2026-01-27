@@ -11,6 +11,10 @@ from apps.cashbox.views import (
     DecaissementsExportView,
     DecaissementsExportPDFView,
     StoreListView,
+    BankTransactionsListView,
+    BankWithdrawalCreateView,
+    BankTransactionsExportPDFView,
+    BankTransactionsExportExcelView,
 )
 
 router = DefaultRouter()
@@ -26,5 +30,9 @@ urlpatterns = [
     path('decaissements/', DecaissementsListView.as_view(), name='decaissements-list'),
     path('decaissements/export/', DecaissementsExportView.as_view(), name='decaissements-export'),
     path('decaissements/export-pdf/', DecaissementsExportPDFView.as_view(), name='decaissements-export-pdf'),
+    path('bank-transactions/', BankTransactionsListView.as_view(), name='bank-transactions-list'),
+    path('bank-transactions/withdraw/', BankWithdrawalCreateView.as_view(), name='bank-withdrawal-create'),
+    path('bank-transactions/export-pdf/', BankTransactionsExportPDFView.as_view(), name='bank-transactions-export-pdf'),
+    path('bank-transactions/export-excel/', BankTransactionsExportExcelView.as_view(), name='bank-transactions-export-excel'),
     path('', include(router.urls)),
 ]

@@ -74,3 +74,67 @@ def get_cashbox_real_balance(store_id=None):
     
     # Solde = Encaissements - Sorties
     return total_encaissements - total_sorties
+
+
+def get_bank_balance(store_id=None):
+    """
+    Calcule le solde bancaire basé sur les transactions.
+    
+    Args:
+        store_id: ID du point de vente (optionnel, si None calcule pour tous les stores)
+    
+    Returns:
+        Decimal: Le solde bancaire calculé à partir des transactions
+    """
+    from apps.cashbox.models import CashMovement
+    from apps.suppliers.models import SupplierPayment
+    from apps.loans.models import LoanPayment
+    from apps.expenses.models import Expense
+    
+    # Total des entrées d'argent en banque (dépôts bancaires)
+    # 1. Dépôts bancaires depuis la caisse
+    bank_deposits_qs = CashMovement.objects.filter(
+        movement_type='out',
+        category='bank_deposit'
+    )
+    if store_id:
+        bank_deposits_qs = bank_deposits_qs.filter(cashbox_session__cashbox__store_id=store_id)
+    total_bank_deposits = bank_deposits_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    
+    total_entrees = total_bank_deposits
+    
+    # Total des sorties d'argent de la banque
+    # 1. Retraits bancaires vers la caisse
+    bank_withdrawals_qs = CashMovement.objects.filter(
+        movement_type='in',
+        category='bank_withdrawal'
+    )
+    if store_id:
+        bank_withdrawals_qs = bank_withdrawals_qs.filter(cashbox_session__cashbox__store_id=store_id)
+    total_bank_withdrawals = bank_withdrawals_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    
+    # 2. Paiements fournisseurs par virement bancaire
+    supplier_payments_bank_qs = SupplierPayment.objects.filter(payment_method='bank_transfer')
+    if store_id:
+        supplier_payments_bank_qs = supplier_payments_bank_qs.filter(
+            Q(purchase_order__store_id=store_id) | Q(purchase_order__isnull=True)
+        )
+    total_supplier_payments_bank = supplier_payments_bank_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    
+    # 3. Remboursements d'emprunts par virement bancaire
+    loan_payments_bank_qs = LoanPayment.objects.filter(payment_method='bank_transfer')
+    if store_id:
+        loan_payments_bank_qs = loan_payments_bank_qs.filter(loan__store_id=store_id)
+    total_loan_payments_bank = loan_payments_bank_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    
+    # 4. Dépenses payées par virement bancaire
+    expenses_bank_qs = Expense.objects.filter(status='paid', payment_method='bank_transfer')
+    if store_id:
+        expenses_bank_qs = expenses_bank_qs.filter(store_id=store_id)
+    total_expenses_bank = expenses_bank_qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    
+    total_sorties = (total_bank_withdrawals + total_supplier_payments_bank + 
+                     total_loan_payments_bank + total_expenses_bank)
+    
+    # Solde bancaire = Dépôts - Retraits et paiements
+    return total_entrees - total_sorties

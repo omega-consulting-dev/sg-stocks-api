@@ -65,9 +65,29 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         return queryset.filter(created_by=user)
     
     def perform_create(self, serializer):
-        count = Expense.objects.count() + 1
+        # Générer un numéro unique en récupérant le dernier numéro existant
+        last_expense = Expense.objects.order_by('-id').first()
+        if last_expense and last_expense.expense_number:
+            # Extraire le numéro de la dernière dépense (EXP00000004 -> 4)
+            try:
+                last_number = int(last_expense.expense_number.replace('EXP', ''))
+                next_number = last_number + 1
+            except (ValueError, AttributeError):
+                # En cas d'erreur, utiliser le count + 1
+                next_number = Expense.objects.count() + 1
+        else:
+            next_number = 1
+        
+        # Générer le prochain numéro avec un format de 8 chiffres
+        expense_number = f"EXP{next_number:08d}"
+        
+        # Vérifier si le numéro existe déjà (sécurité supplémentaire)
+        while Expense.objects.filter(expense_number=expense_number).exists():
+            next_number += 1
+            expense_number = f"EXP{next_number:08d}"
+        
         serializer.save(
-            expense_number=f"EXP{count:08d}",
+            expense_number=expense_number,
             created_by=self.request.user
         )
     
@@ -150,6 +170,27 @@ class ExpenseViewSet(viewsets.ModelViewSet):
                 return Response(
                     {
                         'error': f'Solde insuffisant dans la caisse {cashbox.name}. Solde disponible : {real_balance:,.0f} FCFA, montant requis : {expense.amount:,.0f} FCFA.'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Vérifier le solde bancaire si le paiement est par virement bancaire
+        elif payment_method == 'bank_transfer':
+            # Si la dépense n'a pas de point de vente assigné
+            if not expense.store:
+                return Response(
+                    {'error': 'Cette dépense n\'a pas de point de vente assigné. Veuillez d\'abord modifier la dépense et sélectionner un point de vente.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Vérifier le solde bancaire
+            from apps.cashbox.utils import get_bank_balance
+            bank_balance = get_bank_balance(store_id=expense.store.id)
+            
+            if bank_balance < expense.amount:
+                return Response(
+                    {
+                        'error': f'Solde bancaire insuffisant. Solde disponible : {bank_balance:,.0f} FCFA, montant requis : {expense.amount:,.0f} FCFA.'
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )

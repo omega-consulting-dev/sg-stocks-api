@@ -136,9 +136,10 @@ class RoleSerializer(serializers.ModelSerializer):
             'can_manage_services', 'can_view_services',
             'can_manage_inventory', 'can_view_inventory',
             'can_manage_sales', 'can_manage_customers',
-            'can_manage_suppliers', 'can_manage_cashbox', 'can_manage_loans',
-            'can_manage_expenses', 'can_view_analytics', 'can_export_data',
-            'permissions_count', 'users_count', 'created_at', 'updated_at'
+            'can_manage_suppliers', 'can_manage_cashbox', 'can_manage_bank',
+            'can_manage_loans', 'can_manage_expenses', 'can_view_analytics', 
+            'can_export_data', 'permissions_count', 'users_count', 
+            'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'permissions_count', 'users_count']
     

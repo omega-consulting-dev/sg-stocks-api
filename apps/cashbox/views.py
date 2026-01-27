@@ -144,10 +144,42 @@ class CashMovementViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
     
     def perform_create(self, serializer):
+        # Validation: Pour les sorties d'argent, vérifier que la caisse a assez de fonds
+        if serializer.validated_data.get('movement_type') == 'out':
+            cashbox_session = serializer.validated_data.get('cashbox_session')
+            amount = serializer.validated_data.get('amount', 0)
+            
+            if cashbox_session and cashbox_session.cashbox:
+                cashbox = cashbox_session.cashbox
+                
+                # Calculer le solde réel basé sur les transactions
+                from apps.cashbox.utils import get_cashbox_real_balance
+                available_balance = get_cashbox_real_balance(store_id=cashbox.store.id)
+                
+                if amount > available_balance:
+                    from rest_framework.exceptions import ValidationError
+                    raise ValidationError({
+                        'amount': f'Solde insuffisant. Solde disponible: {available_balance:,.2f} FCFA, Montant demandé: {amount:,.2f} FCFA'
+                    })
+        
         # Generate movement number
-        count = CashMovement.objects.count() + 1
+        last_movement = CashMovement.objects.order_by('-id').first()
+        if last_movement and last_movement.movement_number:
+            try:
+                last_number = int(last_movement.movement_number.replace('MVT', ''))
+                next_number = last_number + 1
+            except (ValueError, AttributeError):
+                next_number = CashMovement.objects.count() + 1
+        else:
+            next_number = 1
+        
+        movement_number = f"MVT{next_number:08d}"
+        while CashMovement.objects.filter(movement_number=movement_number).exists():
+            next_number += 1
+            movement_number = f"MVT{next_number:08d}"
+        
         movement = serializer.save(
-            movement_number=f"MVT{count:08d}",
+            movement_number=movement_number,
             created_by=self.request.user
         )
 
@@ -467,7 +499,18 @@ class CaisseSoldeView(APIView):
         
         # Admin ou access_scope='all' : calculer le solde
         from apps.cashbox.utils import get_cashbox_real_balance
-        real_balance = get_cashbox_real_balance(store_id=store_id)
+        
+        if store_id:
+            # Calculer pour un store spécifique
+            real_balance = get_cashbox_real_balance(store_id=store_id)
+        else:
+            # Calculer le total pour tous les stores
+            from apps.inventory.models import Store
+            all_stores = Store.objects.filter(is_active=True)
+            real_balance = sum(
+                get_cashbox_real_balance(store_id=s.id) 
+                for s in all_stores
+            )
         
         return Response({
             'solde_actuel': float(real_balance),
@@ -545,8 +588,8 @@ class DecaissementsListView(APIView):
                 'store_id': movement.cashbox_session.cashbox.store_id if movement.cashbox_session and movement.cashbox_session.cashbox else None,
             })
         
-        # Trier par date décroissante
-        decaissements.sort(key=lambda x: x['date'], reverse=True)
+        # Trier par code (croissant)
+        decaissements.sort(key=lambda x: x['code'])
         
         # Paginer les résultats
         page = int(request.query_params.get('page', 1))
@@ -898,3 +941,527 @@ class StoreListView(APIView):
         
         stores = Store.objects.filter(is_active=True).values('id', 'name', 'code', 'store_type')
         return Response(list(stores))
+
+
+class BankTransactionsListView(APIView):
+    """
+    Vue pour lister toutes les transactions bancaires (dépôts et retraits)
+    """
+    
+    def get(self, request):
+        user = request.user
+        
+        # Récupérer les paramètres de filtre
+        start_date = request.GET.get('date_debut') or request.GET.get('start_date')
+        end_date = request.GET.get('date_fin') or request.GET.get('end_date')
+        transaction_type = request.GET.get('type')  # 'depot' ou 'retrait'
+        
+        # Récupérer les dépôts bancaires (category='bank_deposit', movement_type='out')
+        deposits = CashMovement.objects.filter(
+            movement_type='out',
+            category='bank_deposit'
+        ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store')
+        
+        # Récupérer les retraits bancaires (category='bank_withdrawal', movement_type='in')
+        withdrawals = CashMovement.objects.filter(
+            movement_type='in',
+            category='bank_withdrawal'
+        ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store')
+        
+        # Récupérer les paiements par virement bancaire (Expenses, SupplierPayments, LoanPayments)
+        from apps.expenses.models import Expense
+        from apps.suppliers.models import SupplierPayment
+        from apps.loans.models import LoanPayment
+        
+        expenses = Expense.objects.filter(
+            status='paid',
+            payment_method='bank_transfer'
+        ).select_related('store')
+        
+        supplier_payments = SupplierPayment.objects.filter(
+            payment_method='bank_transfer'
+        ).select_related('purchase_order__store', 'supplier')
+        
+        loan_payments = LoanPayment.objects.filter(
+            payment_method='bank_transfer'
+        ).select_related('loan__store', 'loan')
+        
+        # Filtrage selon le rôle
+        if not user.is_superuser:
+            if hasattr(user, 'role') and user.role:
+                if user.role.access_scope == 'all':
+                    pass
+                elif user.role.access_scope == 'assigned':
+                    deposits = deposits.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                    withdrawals = withdrawals.filter(cashbox_session__cashbox__store__in=user.assigned_stores.all())
+                    expenses = expenses.filter(store__in=user.assigned_stores.all())
+                    supplier_payments = supplier_payments.filter(purchase_order__store__in=user.assigned_stores.all())
+                    loan_payments = loan_payments.filter(loan__store__in=user.assigned_stores.all())
+                elif user.role.access_scope == 'own':
+                    deposits = deposits.filter(created_by=user)
+                    withdrawals = withdrawals.filter(created_by=user)
+                    expenses = expenses.filter(created_by=user)
+                    supplier_payments = supplier_payments.filter(created_by=user)
+                    loan_payments = loan_payments.filter(created_by=user)
+            else:
+                deposits = deposits.filter(created_by=user)
+                withdrawals = withdrawals.filter(created_by=user)
+                expenses = expenses.filter(created_by=user)
+                supplier_payments = supplier_payments.filter(created_by=user)
+                loan_payments = loan_payments.filter(created_by=user)
+        
+        # Filtrage par date
+        if start_date:
+            deposits = deposits.filter(created_at__date__gte=start_date)
+            withdrawals = withdrawals.filter(created_at__date__gte=start_date)
+            expenses = expenses.filter(payment_date__gte=start_date)
+            supplier_payments = supplier_payments.filter(payment_date__gte=start_date)
+            loan_payments = loan_payments.filter(payment_date__gte=start_date)
+        if end_date:
+            deposits = deposits.filter(created_at__date__lte=end_date)
+            withdrawals = withdrawals.filter(created_at__date__lte=end_date)
+            expenses = expenses.filter(payment_date__lte=end_date)
+            supplier_payments = supplier_payments.filter(payment_date__lte=end_date)
+            loan_payments = loan_payments.filter(payment_date__lte=end_date)
+        
+        transactions = []
+        
+        # Ajouter les dépôts
+        if not transaction_type or transaction_type == 'depot':
+            for movement in deposits:
+                transactions.append({
+                    'id': f"dep-{movement.id}",
+                    'date': movement.created_at.isoformat(),
+                    'type': 'depot',
+                    'amount': float(movement.amount),
+                    'description': movement.description or 'Dépôt bancaire',
+                    'store_name': movement.cashbox_session.cashbox.store.name if movement.cashbox_session and movement.cashbox_session.cashbox else 'N/A',
+                    'balance_after': 0  # Sera calculé après le tri
+                })
+        
+        # Ajouter les retraits (retraits bancaires classiques)
+        if not transaction_type or transaction_type == 'retrait':
+            for movement in withdrawals:
+                transactions.append({
+                    'id': f"wit-{movement.id}",
+                    'date': movement.created_at.isoformat(),
+                    'type': 'retrait',
+                    'amount': float(movement.amount),
+                    'description': movement.description or 'Retrait bancaire',
+                    'store_name': movement.cashbox_session.cashbox.store.name if movement.cashbox_session and movement.cashbox_session.cashbox else 'N/A',
+                    'balance_after': 0  # Sera calculé après le tri
+                })
+            
+            # Ajouter les dépenses payées par virement bancaire
+            for expense in expenses:
+                # Utiliser created_at pour avoir l'heure précise
+                transaction_datetime = expense.created_at
+                transactions.append({
+                    'id': f"exp-{expense.id}",
+                    'date': transaction_datetime.isoformat(),
+                    'type': 'retrait',
+                    'amount': float(expense.amount),
+                    'description': f"Dépense {expense.expense_number} - {expense.description or expense.category.name}",
+                    'store_name': expense.store.name if expense.store else 'N/A',
+                    'balance_after': 0
+                })
+            
+            # Ajouter les paiements fournisseurs par virement bancaire
+            for payment in supplier_payments:
+                # Utiliser created_at pour avoir l'heure précise
+                transaction_datetime = payment.created_at
+                transactions.append({
+                    'id': f"sup-{payment.id}",
+                    'date': transaction_datetime.isoformat(),
+                    'type': 'retrait',
+                    'amount': float(payment.amount),
+                    'description': f"Règlement fournisseur {payment.supplier.name} par virement bancaire",
+                    'store_name': payment.purchase_order.store.name if payment.purchase_order and payment.purchase_order.store else 'N/A',
+                    'balance_after': 0
+                })
+            
+            # Ajouter les remboursements d'emprunts par virement bancaire
+            for payment in loan_payments:
+                # Utiliser created_at pour avoir l'heure précise
+                transaction_datetime = payment.created_at
+                transactions.append({
+                    'id': f"loan-{payment.id}",
+                    'date': transaction_datetime.isoformat(),
+                    'type': 'retrait',
+                    'amount': float(payment.amount),
+                    'description': f"Remboursement emprunt {payment.loan.loan_number} par virement bancaire",
+                    'store_name': payment.loan.store.name if payment.loan and payment.loan.store else 'N/A',
+                    'balance_after': 0
+                })
+        
+        # Trier par date
+        transactions.sort(key=lambda x: x['date'])
+        
+        # Calculer les soldes
+        balance = 0
+        for transaction in transactions:
+            if transaction['type'] == 'depot':
+                balance += transaction['amount']
+            else:  # retrait
+                balance -= transaction['amount']
+            transaction['balance_after'] = balance
+        
+        # Les transactions sont déjà triées par ordre croissant de date
+        
+        # Calculer les totaux
+        total_deposits = sum(t['amount'] for t in transactions if t['type'] == 'depot')
+        total_withdrawals = sum(t['amount'] for t in transactions if t['type'] == 'retrait')
+        
+        # Paginer
+        page = int(request.GET.get('page', 1))
+        page_size = int(request.GET.get('page_size', 20))
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        
+        paginated = transactions[start_idx:end_idx]
+        
+        return Response({
+            'count': len(transactions),
+            'next': None if end_idx >= len(transactions) else f'?page={page + 1}',
+            'previous': None if page == 1 else f'?page={page - 1}',
+            'results': paginated,
+            'balance': balance,
+            'total_deposits': total_deposits,
+            'total_withdrawals': total_withdrawals
+        })
+
+
+class BankWithdrawalCreateView(APIView):
+    """
+    Vue pour créer un retrait bancaire
+    """
+    
+    def post(self, request):
+        amount = request.data.get('amount')
+        description = request.data.get('description', 'Retrait bancaire')
+        store_id = request.data.get('store_id')
+        
+        if not amount or not store_id:
+            return Response(
+                {'error': 'Le montant et le magasin sont requis'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from apps.inventory.models import Store
+            store = Store.objects.get(id=store_id)
+        except Store.DoesNotExist:
+            return Response(
+                {'error': 'Magasin introuvable'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Récupérer ou créer la caisse pour ce magasin
+        cashbox = Cashbox.objects.filter(store=store, is_active=True).first()
+        if not cashbox:
+            # Créer une caisse par défaut
+            cashbox = Cashbox.objects.create(
+                name=f"Caisse {store.name}",
+                code=f"CASH-{store.code}",
+                store=store,
+                is_active=True,
+                created_by=request.user
+            )
+        
+        # Récupérer ou créer une session ouverte
+        cashbox_session = CashboxSession.objects.filter(
+            cashbox=cashbox,
+            status='open'
+        ).first()
+        
+        if not cashbox_session:
+            # Créer une nouvelle session
+            cashbox_session = CashboxSession.objects.create(
+                cashbox=cashbox,
+                cashier=request.user,
+                opening_date=timezone.now(),
+                opening_balance=0,
+                status='open',
+                created_by=request.user
+            )
+        
+        # Générer le numéro de mouvement
+        last_movement = CashMovement.objects.filter(
+            movement_number__startswith='BWD-'
+        ).order_by('-created_at').first()
+        
+        if last_movement:
+            last_num = int(last_movement.movement_number.split('-')[1])
+            movement_number = f'BWD-{last_num + 1:05d}'
+        else:
+            movement_number = 'BWD-00001'
+        
+        # Créer le mouvement de retrait bancaire
+        movement = CashMovement.objects.create(
+            movement_number=movement_number,
+            cashbox_session=cashbox_session,
+            movement_type='in',  # Argent qui entre dans la caisse depuis la banque
+            category='bank_withdrawal',
+            amount=amount,
+            payment_method='cash',
+            description=description,
+            created_by=request.user
+        )
+        
+        # Mettre à jour le solde de la caisse
+        cashbox.current_balance += float(amount)
+        cashbox.save()
+        
+        return Response({
+            'id': movement.id,
+            'date': movement.created_at.isoformat(),
+            'type': 'retrait',
+            'amount': float(movement.amount),
+            'description': movement.description,
+            'store_name': store.name,
+            'movement_number': movement.movement_number
+        }, status=status.HTTP_201_CREATED)
+
+
+class BankTransactionsExportPDFView(APIView):
+    """
+    Vue pour exporter les transactions bancaires en PDF
+    """
+    
+    def get(self, request):
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+        from io import BytesIO
+        
+        # Récupérer les paramètres de filtre
+        start_date = request.GET.get('date_debut') or request.GET.get('start_date')
+        end_date = request.GET.get('date_fin') or request.GET.get('end_date')
+        transaction_type = request.GET.get('type')
+        
+        # Réutiliser la logique de BankTransactionsListView
+        view = BankTransactionsListView()
+        view.request = request
+        response_data = view.get(request).data
+        
+        transactions = response_data['results']
+        balance = response_data['balance']
+        total_deposits = response_data['total_deposits']
+        total_withdrawals = response_data['total_withdrawals']
+        
+        # Créer le PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+        elements = []
+        
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        
+        # Titre
+        title = Paragraph("HISTORIQUE DES TRANSACTIONS BANCAIRES", title_style)
+        elements.append(title)
+        
+        # Période
+        if start_date and end_date:
+            period = Paragraph(
+                f"Période: du {start_date} au {end_date}",
+                styles['Normal']
+            )
+            elements.append(period)
+            elements.append(Spacer(1, 12))
+        
+        # Résumé
+        summary_data = [
+            ['Solde Bancaire', f'{balance:,.2f} FCFA'],
+            ['Total Dépôts', f'{total_deposits:,.2f} FCFA'],
+            ['Total Retraits', f'{total_withdrawals:,.2f} FCFA']
+        ]
+        summary_table = Table(summary_data, colWidths=[8*cm, 6*cm])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#dbeafe')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#1e40af')),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 20))
+        
+        # Tableau des transactions
+        table_data = [['Date', 'Type', 'Description', 'Magasin', 'Montant', 'Solde Après']]
+        
+        # Style pour les paragraphes dans le tableau
+        desc_style = ParagraphStyle(
+            'DescStyle',
+            parent=styles['Normal'],
+            fontSize=8,
+            leading=10,
+            wordWrap='CJK'
+        )
+        
+        for transaction in transactions:
+            date_obj = datetime.fromisoformat(transaction['date'].replace('Z', '+00:00'))
+            formatted_date = date_obj.strftime('%d/%m/%Y %H:%M')
+            transaction_type_display = 'Dépôt' if transaction['type'] == 'depot' else 'Retrait'
+            amount_display = f"+{transaction['amount']:,.2f}" if transaction['type'] == 'depot' else f"-{transaction['amount']:,.2f}"
+            
+            # Utiliser Paragraph pour la description afin de permettre le retour à la ligne
+            description_para = Paragraph(transaction['description'], desc_style)
+            
+            table_data.append([
+                formatted_date,
+                transaction_type_display,
+                description_para,  # Utiliser le Paragraph au lieu du texte brut
+                transaction['store_name'],
+                amount_display,
+                f"{transaction['balance_after']:,.2f}"
+            ])
+        
+        table = Table(table_data, colWidths=[3.5*cm, 2.5*cm, 7*cm, 4*cm, 3*cm, 3*cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (4, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Alignement vertical en haut
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+        ]))
+        elements.append(table)
+        
+        doc.build(elements)
+        
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        
+        filename = 'transactions_bancaires'
+        if start_date and end_date:
+            filename += f'_{start_date}_au_{end_date}'
+        filename += '.pdf'
+        
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        return response
+
+
+class BankTransactionsExportExcelView(APIView):
+    """
+    Vue pour exporter les transactions bancaires en Excel
+    """
+    
+    def get(self, request):
+        # Récupérer les paramètres de filtre
+        start_date = request.GET.get('date_debut') or request.GET.get('start_date')
+        end_date = request.GET.get('date_fin') or request.GET.get('end_date')
+        transaction_type = request.GET.get('type')
+        
+        # Réutiliser la logique de BankTransactionsListView
+        view = BankTransactionsListView()
+        view.request = request
+        response_data = view.get(request).data
+        
+        transactions = response_data['results']
+        balance = response_data['balance']
+        total_deposits = response_data['total_deposits']
+        total_withdrawals = response_data['total_withdrawals']
+        
+        # Créer le workbook
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Transactions Bancaires"
+        
+        # Style du titre
+        title_font = Font(size=14, bold=True, color='1e40af')
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='1e40af', end_color='1e40af', fill_type='solid')
+        
+        # Titre
+        ws['A1'] = 'HISTORIQUE DES TRANSACTIONS BANCAIRES'
+        ws['A1'].font = title_font
+        ws.merge_cells('A1:F1')
+        ws['A1'].alignment = Alignment(horizontal='center')
+        
+        # Période
+        if start_date and end_date:
+            ws['A2'] = f'Période: du {start_date} au {end_date}'
+            ws.merge_cells('A2:F2')
+        
+        # Résumé
+        ws['A4'] = 'Solde Bancaire:'
+        ws['B4'] = f'{balance:,.2f} FCFA'
+        ws['A5'] = 'Total Dépôts:'
+        ws['B5'] = f'{total_deposits:,.2f} FCFA'
+        ws['A6'] = 'Total Retraits:'
+        ws['B6'] = f'{total_withdrawals:,.2f} FCFA'
+        
+        for row in range(4, 7):
+            ws[f'A{row}'].font = Font(bold=True)
+        
+        # En-têtes du tableau
+        headers = ['Date', 'Type', 'Description', 'Magasin', 'Montant', 'Solde Après']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=8, column=col)
+            cell.value = header
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+        
+        # Données
+        for row_idx, transaction in enumerate(transactions, 9):
+            date_obj = datetime.fromisoformat(transaction['date'].replace('Z', '+00:00'))
+            formatted_date = date_obj.strftime('%d/%m/%Y %H:%M')
+            transaction_type_display = 'Dépôt' if transaction['type'] == 'depot' else 'Retrait'
+            amount_display = f"+{transaction['amount']:,.2f}" if transaction['type'] == 'depot' else f"-{transaction['amount']:,.2f}"
+            
+            ws.cell(row=row_idx, column=1).value = formatted_date
+            ws.cell(row=row_idx, column=2).value = transaction_type_display
+            ws.cell(row=row_idx, column=3).value = transaction['description']
+            ws.cell(row=row_idx, column=4).value = transaction['store_name']
+            ws.cell(row=row_idx, column=5).value = amount_display
+            ws.cell(row=row_idx, column=5).alignment = Alignment(horizontal='right')
+            ws.cell(row=row_idx, column=6).value = f"{transaction['balance_after']:,.2f}"
+            ws.cell(row=row_idx, column=6).alignment = Alignment(horizontal='right')
+        
+        # Ajuster les largeurs de colonnes
+        ws.column_dimensions['A'].width = 18
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 30
+        ws.column_dimensions['D'].width = 20
+        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['F'].width = 15
+        
+        # Sauvegarder dans un buffer
+        from io import BytesIO
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        
+        response = HttpResponse(
+            buffer,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        
+        filename = 'transactions_bancaires'
+        if start_date and end_date:
+            filename += f'_{start_date}_au_{end_date}'
+        filename += '.xlsx'
+        
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        return response

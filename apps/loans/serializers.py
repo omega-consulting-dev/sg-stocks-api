@@ -74,10 +74,25 @@ class LoanCreateSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         # Generate loan number
-        count = Loan.objects.count() + 1
-        validated_data['loan_number'] = f"LOAN{count:06d}"
+        last_loan = Loan.objects.order_by('-id').first()
+        if last_loan and last_loan.loan_number:
+            try:
+                last_number = int(last_loan.loan_number.replace('LOAN', ''))
+                next_number = last_number + 1
+            except (ValueError, AttributeError):
+                next_number = Loan.objects.count() + 1
+        else:
+            next_number = 1
         
-        loan = Loan.objects.create(**validated_data)
+        loan_number = f"LOAN{next_number:06d}"
+        while Loan.objects.filter(loan_number=loan_number).exists():
+            next_number += 1
+            loan_number = f"LOAN{next_number:06d}"
+        
+        validated_data['loan_number'] = loan_number
+        
+        # Note: created_by sera défini par perform_create dans le ViewSet
+        loan = super().create(validated_data)
         
         # Calculate total amount
         loan.calculate_total_amount()

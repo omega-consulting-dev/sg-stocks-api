@@ -80,8 +80,22 @@ class SupplierCreateUpdateSerializer(serializers.ModelSerializer):
         """Auto-generate supplier code if not provided."""
         if not validated_data.get('supplier_code'):
             # Generate supplier code
-            count = Supplier.objects.count() + 1
-            validated_data['supplier_code'] = f"FRN{count:05d}"
+            last_supplier = Supplier.objects.order_by('-id').first()
+            if last_supplier and last_supplier.supplier_code:
+                try:
+                    last_number = int(last_supplier.supplier_code.replace('FRN', ''))
+                    next_number = last_number + 1
+                except (ValueError, AttributeError):
+                    next_number = Supplier.objects.count() + 1
+            else:
+                next_number = 1
+            
+            supplier_code = f"FRN{next_number:05d}"
+            while Supplier.objects.filter(supplier_code=supplier_code).exists():
+                next_number += 1
+                supplier_code = f"FRN{next_number:05d}"
+            
+            validated_data['supplier_code'] = supplier_code
         
         return super().create(validated_data)
 
@@ -130,16 +144,134 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
         from django.utils import timezone
         from decimal import Decimal
         from django.db import transaction
+        from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
+        from django.db.models import Sum
 
         validated_data['payment_number'] = f"PAY{timezone.now().strftime('%Y%m%d%H%M%S')}"
         
         supplier = validated_data.get('supplier')
         amount = Decimal(str(validated_data.get('amount', 0)))
         po = validated_data.get('purchase_order')
+        payment_method = validated_data.get('payment_method')
+        request = self.context['request']
+        
+        # Vérifier et créer le mouvement de caisse/banque si nécessaire
+        if payment_method in ['cash', 'bank_transfer']:
+            # Récupérer le store depuis la requête (ou utiliser le premier store disponible)
+            store_id = request.data.get('store_id')
+            store = None
+            
+            if store_id:
+                from apps.inventory.models import Store
+                try:
+                    store = Store.objects.get(id=store_id)
+                except Store.DoesNotExist:
+                    pass
+            
+            # Si pas de store spécifié, utiliser le premier store disponible
+            if not store:
+                from apps.inventory.models import Store
+                store = Store.objects.first()
+            
+            if store:
+                # Récupérer ou créer la caisse
+                cashbox, _ = Cashbox.objects.get_or_create(
+                    store=store,
+                    is_active=True,
+                    defaults={
+                        'name': f'Caisse {store.name}',
+                        'code': f'CASH-{store.code}',
+                        'created_by': request.user
+                    }
+                )
+                
+                # Récupérer ou créer une session ouverte
+                cashbox_session, _ = CashboxSession.objects.get_or_create(
+                    cashbox=cashbox,
+                    status='open',
+                    defaults={
+                        'cashier': request.user,
+                        'opening_date': timezone.now(),
+                        'opening_balance': 0,
+                        'created_by': request.user
+                    }
+                )
+                
+                # Vérifier le solde disponible avant de créer le mouvement
+                if payment_method == 'cash':
+                    current_balance = cashbox.current_balance
+                    if amount > current_balance:
+                        raise serializers.ValidationError({
+                            'amount': f'Solde insuffisant. Solde disponible: {current_balance} FCFA'
+                        })
+                
+                elif payment_method == 'bank_transfer':
+                    # Calculer le solde bancaire disponible
+                    bank_deposits = CashMovement.objects.filter(
+                        category='bank_deposit',
+                        movement_type='out'
+                    ).aggregate(total=Sum('amount'))['total'] or 0
+                    
+                    bank_withdrawals = CashMovement.objects.filter(
+                        category='bank_withdrawal',
+                        movement_type='in'
+                    ).aggregate(total=Sum('amount'))['total'] or 0
+                    
+                    bank_balance = bank_deposits - bank_withdrawals
+                    
+                    if amount > bank_balance:
+                        raise serializers.ValidationError({
+                            'amount': f'Solde bancaire insuffisant. Solde disponible: {bank_balance} FCFA'
+                        })
         
         with transaction.atomic():
             # Créer le paiement
             payment = SupplierPayment.objects.create(**validated_data)
+            
+            # Créer le mouvement de caisse/banque correspondant
+            if payment_method in ['cash', 'bank_transfer'] and store:
+                last_movement = CashMovement.objects.order_by('-id').first()
+                if last_movement and last_movement.movement_number:
+                    try:
+                        # Extraire le numéro du dernier mouvement
+                        import re
+                        match = re.search(r'\d+', last_movement.movement_number)
+                        if match:
+                            last_number = int(match.group())
+                            movement_count = last_number + 1
+                        else:
+                            movement_count = CashMovement.objects.count() + 1
+                    except (ValueError, AttributeError):
+                        movement_count = CashMovement.objects.count() + 1
+                else:
+                    movement_count = 1
+                
+                if payment_method == 'cash':
+                    # Paiement en espèces: argent sort de la caisse
+                    CashMovement.objects.create(
+                        movement_number=f'SUPP-{movement_count:05d}',
+                        cashbox_session=cashbox_session,
+                        movement_type='out',
+                        category='supplier_payment',
+                        amount=amount,
+                        payment_method='cash',
+                        reference=payment.payment_number,
+                        description=f'Règlement fournisseur {supplier.name} en espèces',
+                        created_by=request.user
+                    )
+                    
+                    # Mettre à jour le solde de la caisse
+                    cashbox.current_balance -= amount
+                    cashbox.save()
+                    
+                # Note: Pour les paiements par virement bancaire, on ne crée PAS de CashMovement
+                # car l'argent ne passe pas par la caisse physique.
+                # Le SupplierPayment avec payment_method='bank_transfer' est suffisant
+                # et sera pris en compte dans le calcul du solde bancaire via get_bank_balance()
+                    
+                    # Mettre à jour le solde de la caisse
+                    cashbox.current_balance += amount
+                    cashbox.save()
             
             remaining_amount = amount
             
