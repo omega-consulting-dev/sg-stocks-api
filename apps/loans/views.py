@@ -62,6 +62,54 @@ class LoanViewSet(viewsets.ModelViewSet):
         """Définir automatiquement created_by lors de la création"""
         serializer.save(created_by=self.request.user)
     
+    @action(detail=False, methods=['get'], url_path='export_excel')
+    def export_excel(self, request):
+        """Export loans to Excel."""
+        loans = self.get_queryset()
+        
+        # Appliquer les filtres si présents
+        loan_type = request.query_params.get('loan_type')
+        status_filter = request.query_params.get('status')
+        date_from = request.query_params.get('start_date__gte')
+        date_to = request.query_params.get('start_date__lte')
+        
+        if loan_type:
+            loans = loans.filter(loan_type=loan_type)
+        if status_filter:
+            loans = loans.filter(status=status_filter)
+        if date_from:
+            loans = loans.filter(start_date__gte=date_from)
+        if date_to:
+            loans = loans.filter(start_date__lte=date_to)
+        
+        wb, ws = ExcelExporter.create_workbook("Emprunts")
+        
+        columns = [
+            'N° Emprunt', 'Type', 'Prêteur', 'Date Début', 'Date Fin',
+            'Montant Principal', 'Taux (%)', 'Durée (mois)', 
+            'Montant Total', 'Montant Payé', 'Solde Restant', 'Statut'
+        ]
+        ExcelExporter.style_header(ws, columns)
+        
+        for row_num, loan in enumerate(loans, 2):
+            ws.cell(row=row_num, column=1, value=loan.loan_number)
+            ws.cell(row=row_num, column=2, value=loan.get_loan_type_display())
+            ws.cell(row=row_num, column=3, value=loan.lender_name)
+            ws.cell(row=row_num, column=4, value=loan.start_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=5, value=loan.end_date.strftime('%d/%m/%Y'))
+            ws.cell(row=row_num, column=6, value=float(loan.principal_amount))
+            ws.cell(row=row_num, column=7, value=float(loan.interest_rate))
+            ws.cell(row=row_num, column=8, value=loan.duration_months)
+            ws.cell(row=row_num, column=9, value=float(loan.total_amount))
+            ws.cell(row=row_num, column=10, value=float(loan.paid_amount))
+            ws.cell(row=row_num, column=11, value=float(loan.balance_due))
+            ws.cell(row=row_num, column=12, value=loan.get_status_display())
+        
+        ExcelExporter.auto_adjust_columns(ws)
+        
+        filename = f"emprunts_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return ExcelExporter.generate_response(wb, filename)
+    
     @action(detail=True, methods=['post'])
     def make_payment(self, request, pk=None):
         """Record a loan payment."""
@@ -103,6 +151,20 @@ class LoanViewSet(viewsets.ModelViewSet):
                 return Response(
                     {
                         'error': f'Solde bancaire insuffisant. Solde disponible: {bank_balance:,.2f} XAF, Montant demandé: {amount:,.2f} XAF'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        elif payment_method == 'mobile_money':
+            # Vérifier le solde Mobile Money
+            from apps.cashbox.utils import get_mobile_money_balance
+            
+            mobile_money_balance = get_mobile_money_balance(store_id=store.id)
+            
+            if amount > mobile_money_balance:
+                return Response(
+                    {
+                        'error': f'Solde Mobile Money insuffisant. Solde disponible: {mobile_money_balance:,.2f} XAF, Montant demandé: {amount:,.2f} XAF'
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
@@ -177,8 +239,9 @@ class LoanViewSet(viewsets.ModelViewSet):
             cashbox.current_balance -= amount
             cashbox.save()
         
-        # Note: Pour les paiements par virement bancaire, on ne crée PAS de CashMovement
-        # car l'argent sort directement de la banque sans passer par la caisse physique.
+        # Note: Pour les paiements par virement bancaire et Mobile Money, on ne crée PAS de CashMovement
+        # car l'argent sort directement de la banque/Mobile Money sans passer par la caisse physique.
+        # Le solde Mobile Money est calculé automatiquement via les LoanPayment dans get_mobile_money_balance()
         
         # Update loan paid amount
         loan.paid_amount += amount

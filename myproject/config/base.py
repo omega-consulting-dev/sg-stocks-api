@@ -13,7 +13,9 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
-CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
+CORS_ALLOW_ALL_ORIGINS = False  # Never use wildcard with credentials
+CORS_ALLOWED_ORIGINS = []  # Will be set in dev.py/prod.py
+CORS_ALLOWED_ORIGIN_REGEXES = []  # Will be set in dev.py/prod.py
 CORS_ALLOW_HEADERS = list(default_headers) + env.list('CORS_ALLOW_HEADERS', default=[])
 CORS_ALLOW_CREDENTIALS = True
 
@@ -62,18 +64,18 @@ CELERY_TIMEZONE = 'Africa/Douala'
 
 # Pour le développement : exécuter les tâches de manière synchrone si Redis n'est pas disponible
 # En production, mettez CELERY_TASK_ALWAYS_EAGER = False et lancez un worker Celery
-CELERY_TASK_ALWAYS_EAGER = env.bool('CELERY_TASK_ALWAYS_EAGER', default=True)
+CELERY_TASK_ALWAYS_EAGER = False  # Mode synchrone forcé
 CELERY_TASK_EAGER_PROPAGATES = True
 
-# Email
-EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
-EMAIL_HOST = env('EMAIL_HOST', default='')
-EMAIL_PORT = env.int('EMAIL_PORT', default=587)
-EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
-EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
-EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+# Email - CONFIGURATION EN DUR POUR FORCER SMTP
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'ralphsengue@gmail.com'
+EMAIL_HOST_PASSWORD = 'dyzymwfevkulqnid'
 
-DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='services@sg-stocks.com')
+DEFAULT_FROM_EMAIL = 'ralphsengue@gmail.com'
 
 # Emails pour les notifications admin (messages de contact)
 ADMIN_NOTIFICATION_EMAILS = env.list('ADMIN_NOTIFICATION_EMAILS', default=['admin@localhost'])

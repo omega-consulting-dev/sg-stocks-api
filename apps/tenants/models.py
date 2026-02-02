@@ -40,6 +40,7 @@ class Company(TenantMixin):
     # Limits based on plan
     max_users = models.IntegerField(default=3, verbose_name="Nombre max d'utilisateurs")
     max_stores = models.IntegerField(default=1, verbose_name="Nombre max de points de vente")
+    max_warehouses = models.IntegerField(default=0, verbose_name="Nombre max de magasins/entrepôts")
     max_products = models.IntegerField(default=1000, verbose_name="Nombre max de produits")
     max_storage_mb = models.IntegerField(default=1000, verbose_name="Stockage max (MB)")
     
@@ -79,6 +80,36 @@ class Company(TenantMixin):
         default=Decimal('0.00'),
         verbose_name="Prix mensuel"
     )
+    # Tarification différenciée
+    first_payment_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        verbose_name="Prix du 1er paiement (inscription)",
+        help_text="Prix pour la première inscription (ex: 229900 FCFA)"
+    )
+    renewal_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        verbose_name="Prix de renouvellement",
+        help_text="Prix pour les renouvellements après la première année (ex: 100000 FCFA)"
+    )
+    subscription_duration_days = models.IntegerField(
+        default=365,
+        verbose_name="Durée de l'abonnement (jours)",
+        help_text="Nombre de jours pour chaque période d'abonnement (ex: 365 pour 1 an)"
+    )
+    trial_days = models.IntegerField(
+        default=14,
+        verbose_name="Jours d'essai gratuit",
+        help_text="Nombre de jours d'essai gratuit à l'inscription (ex: 14)"
+    )
+    is_first_payment = models.BooleanField(
+        default=True,
+        verbose_name="Premier paiement",
+        help_text="True si c'est la première inscription, False pour les renouvellements"
+    )
     last_payment_date = models.DateField(null=True, blank=True, verbose_name="Dernière facture")
     next_billing_date = models.DateField(null=True, blank=True, verbose_name="Prochaine facturation")
     
@@ -115,6 +146,9 @@ class Company(TenantMixin):
     
     def can_add_user(self):
         """Check if tenant can add more users."""
+        # Si max_users = 0 ou 999999, c'est illimité
+        if self.max_users == 0 or self.max_users >= 999999:
+            return True
         # Note: Import local pour éviter les conflits de modèles
         try:
             from apps.accounts.models import User
@@ -124,10 +158,27 @@ class Company(TenantMixin):
         return current_users < self.max_users
     
     def can_add_store(self):
-        """Check if tenant can add more stores."""
+        """Check if tenant can add more stores (points de vente uniquement)."""
+        # Si max_stores = 0 ou 999999, c'est illimité
+        if self.max_stores == 0 or self.max_stores >= 999999:
+            return True
         from apps.inventory.models import Store
-        current_stores = Store.objects.count()
+        # Compter uniquement les points de vente (store_type='retail')
+        current_stores = Store.objects.filter(store_type='retail').count()
         return current_stores < self.max_stores
+    
+    def can_add_warehouse(self):
+        """Check if tenant can add more warehouses (magasins/entrepôts)."""
+        # Si max_warehouses = 0, pas de magasins autorisés
+        if self.max_warehouses == 0:
+            return False
+        # Si max_warehouses = 999999, c'est illimité
+        if self.max_warehouses >= 999999:
+            return True
+        from apps.inventory.models import Store
+        # Compter uniquement les magasins/entrepôts (store_type in ['warehouse', 'both'])
+        current_warehouses = Store.objects.filter(store_type__in=['warehouse', 'both']).count()
+        return current_warehouses < self.max_warehouses
     
     def has_feature(self, feature_name):
         """Check if tenant has access to a specific feature."""
@@ -163,13 +214,27 @@ class Company(TenantMixin):
         return 0
     
     def get_plan_price(self):
-        """Retourne le prix mensuel selon le plan."""
+        """Retourne le prix selon le plan et si c'est le 1er paiement ou un renouvellement."""
+        # Si le prix est configuré dans first_payment_price/renewal_price, utiliser ces valeurs
+        if self.is_first_payment and self.first_payment_price > 0:
+            return self.first_payment_price
+        elif not self.is_first_payment and self.renewal_price > 0:
+            return self.renewal_price
+        
+        # Sinon, utiliser les prix par défaut des plans (ancien système)
         prices = {
             'starter': Decimal('15000.00'),
             'business': Decimal('40000.00'),
             'enterprise': Decimal('60000.00'),
         }
         return prices.get(self.plan, Decimal('15000.00'))
+    
+    def get_current_price(self):
+        """Retourne le prix actuel à payer (1er paiement ou renouvellement)."""
+        if self.is_first_payment:
+            return self.first_payment_price if self.first_payment_price > 0 else self.get_plan_price()
+        else:
+            return self.renewal_price if self.renewal_price > 0 else self.get_plan_price()
     
     def save(self, *args, **kwargs):
         """Override save pour mettre à jour le prix automatiquement."""
@@ -210,7 +275,7 @@ class CompanyBilling(models.Model):
     due_date = models.DateField(verbose_name="Date d'échéance")
     amount = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="Montant")
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, verbose_name="Montant TVA")
-    total_amount = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="Total TTC")
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, verbose_name="Montant total")
     
     # Status
     STATUS_CHOICES = [

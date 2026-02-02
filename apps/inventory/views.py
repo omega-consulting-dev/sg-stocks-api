@@ -139,6 +139,40 @@ class StoreViewSet(viewsets.ModelViewSet):
         return queryset.filter(id__in=user.assigned_stores.values_list('id', flat=True))
     
     def perform_create(self, serializer):
+        # Vérifier les limites du plan avant de créer un store
+        from apps.tenants.models import Company
+        from django.db import connection
+        
+        schema_name = connection.schema_name
+        if schema_name != 'public':
+            try:
+                company = Company.objects.using('default').get(schema_name=schema_name)
+                store_type = serializer.validated_data.get('store_type', 'retail')
+                
+                if store_type in ['warehouse', 'both']:
+                    # Vérifier si on peut créer un magasin/entrepôt
+                    if not company.can_add_warehouse():
+                        from rest_framework.exceptions import ValidationError
+                        max_w = company.max_warehouses
+                        if max_w == 0:
+                            raise ValidationError({
+                                'detail': f'Votre plan {company.plan.upper()} ne permet pas de créer de magasins/entrepôts. Veuillez passer au plan Business ou Enterprise.'
+                            })
+                        else:
+                            raise ValidationError({
+                                'detail': f'Limite de magasins/entrepôts atteinte ({max_w}). Passez au plan Enterprise pour des magasins illimités.'
+                            })
+                
+                if store_type in ['retail', 'both']:
+                    # Vérifier si on peut créer un point de vente
+                    if not company.can_add_store():
+                        from rest_framework.exceptions import ValidationError
+                        raise ValidationError({
+                            'detail': f'Limite de points de vente atteinte ({company.max_stores}). Passez au plan Enterprise pour des points de vente illimités.'
+                        })
+            except Company.DoesNotExist:
+                pass
+        
         serializer.save(created_by=self.request.user)
     
     def perform_update(self, serializer):
@@ -165,6 +199,18 @@ class StoreViewSet(viewsets.ModelViewSet):
             ).count(),
         }
         return Response(stats)
+    
+    @extend_schema(
+        summary="Liste tous les magasins pour les transferts",
+        description="Retourne tous les magasins actifs sans restriction d'accès - utilisé pour les destinations de transfert",
+        tags=["Inventory"]
+    )
+    @action(detail=False, methods=['get'])
+    def all_for_transfers(self, request):
+        """Get all active stores for transfer destinations (bypasses assigned stores filter)."""
+        stores = Store.objects.filter(is_active=True).select_related('manager')
+        serializer = self.get_serializer(stores, many=True)
+        return Response(serializer.data)
     
     @extend_schema(
         summary="Liste des produits d'un magasin",
@@ -1201,6 +1247,16 @@ class StockTransferViewSet(viewsets.ModelViewSet):
             return StockTransferCreateSerializer
         return StockTransferDetailSerializer
     
+    def get_permissions(self):
+        """
+        Personnaliser les permissions selon l'action.
+        Pour validate_transfer, receive et cancel, on utilise seulement IsAuthenticated
+        car on a des vérifications personnalisées dans les méthodes.
+        """
+        if self.action in ['validate_transfer', 'receive', 'cancel']:
+            return [IsAuthenticated()]
+        return super().get_permissions()
+    
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
     
@@ -1254,13 +1310,12 @@ class StockTransferViewSet(viewsets.ModelViewSet):
             return False
         
         # Doit avoir la permission de gérer l'inventaire
+        # Si l'utilisateur a can_manage_inventory, il peut valider les transferts
         if not user.role.can_manage_inventory:
             return False
         
-        # Doit être assigné au store source
-        if user.role.access_scope == 'assigned':
-            return transfer.source_store in user.assigned_stores.all()
-        
+        # Avec can_manage_inventory, l'utilisateur peut valider tous les transferts
+        # (peu importe son access_scope ou ses magasins assignés)
         return True
     
     def _can_receive_transfer(self, transfer):
@@ -1268,17 +1323,20 @@ class StockTransferViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         # Admin peut tout faire
-        if user.is_superuser or user.role.name == 'super_admin':
+        if user.is_superuser or (user.role and user.role.name == 'super_admin'):
             return True
         
-        # Doit avoir la permission de voir/gérer l'inventaire
-        if not (user.role.can_manage_inventory or user.role.can_view_inventory):
+        # Doit avoir un rôle
+        if not user.role:
             return False
         
-        # Doit être assigné au store destination
-        if user.role.access_scope == 'assigned':
-            return transfer.destination_store in user.assigned_stores.all()
+        # Doit avoir la permission de gérer l'inventaire
+        # Si l'utilisateur a can_manage_inventory, il peut recevoir les transferts
+        if not user.role.can_manage_inventory:
+            return False
         
+        # Avec can_manage_inventory, l'utilisateur peut recevoir tous les transferts
+        # (peu importe son access_scope ou ses magasins assignés)
         return True
     
     @extend_schema(summary="Valider le transfert", tags=["Inventory"])

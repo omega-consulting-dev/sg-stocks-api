@@ -2,11 +2,92 @@
 Vues pour la gestion des utilisateurs dans le schéma public (SuperAdmin).
 """
 from rest_framework import viewsets, status
+from rest_framework import serializers as drf_serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from apps.accounts.models import User
+from django.contrib.auth.password_validation import validate_password
+from apps.main.models import User  # Utiliser le modèle User du schéma public
 from apps.accounts.serializers import UserListSerializer, UserDetailSerializer
+
+
+class PublicUserCreateSerializer(drf_serializers.ModelSerializer):
+    """Serializer pour créer un utilisateur dans le schéma public."""
+    
+    password = drf_serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_password],
+        style={'input_type': 'password'}
+    )
+    password_confirm = drf_serializers.CharField(
+        write_only=True,
+        required=True,
+        style={'input_type': 'password'}
+    )
+    
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'password', 'password_confirm',
+            'first_name', 'last_name', 'phone',
+            'employee_id', 'role',
+            'is_active', 'is_staff', 'is_superuser'
+        ]
+    
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise drf_serializers.ValidationError({
+                'password_confirm': 'Les mots de passe ne correspondent pas.'
+            })
+        return attrs
+    
+    def create(self, validated_data):
+        validated_data.pop('password_confirm')
+        password = validated_data.pop('password')
+        user = User.objects.create_user(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+
+
+class PublicUserUpdateSerializer(drf_serializers.ModelSerializer):
+    """Serializer pour modifier un utilisateur dans le schéma public."""
+    
+    password = drf_serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        style={'input_type': 'password'}
+    )
+    phone = drf_serializers.CharField(required=False, allow_blank=True, allow_null=True, default=None)
+    employee_id = drf_serializers.CharField(required=False, allow_blank=True, allow_null=True, default=None)
+    role = drf_serializers.CharField(required=False, allow_blank=True, allow_null=True, default=None)
+    # secondary_roles supprimé car non présent dans le modèle User public
+    
+    class Meta:
+        model = User
+        fields = [
+            'email', 'first_name', 'last_name', 'phone',
+            'employee_id', 'role',
+            'password', 'is_active', 'is_staff', 'is_superuser'
+        ]
+    
+    def validate_password(self, value):
+        if value and value.strip():
+            validate_password(value)
+            return value
+        return None
+    
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        # Mettre à jour le mot de passe seulement s'il est fourni et non None
+        if password is not None and password:
+            instance.set_password(password)
+        instance.save()
+        return instance
 
 
 class PublicUserViewSet(viewsets.ModelViewSet):
@@ -15,11 +96,16 @@ class PublicUserViewSet(viewsets.ModelViewSet):
     Utilisé par l'application SuperAdmin.
     """
     permission_classes = [IsAuthenticated]
-    queryset = User.objects.filter(is_staff=True).order_by('-date_joined')
+    # Afficher tous les utilisateurs sauf les anonymes (username vide)
+    queryset = User.objects.exclude(username='').order_by('-date_joined')
     
     def get_serializer_class(self):
-        if self.action in ['list']:
+        if self.action == 'list':
             return UserListSerializer
+        elif self.action == 'create':
+            return PublicUserCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return PublicUserUpdateSerializer
         return UserDetailSerializer
     
     def create(self, request, *args, **kwargs):

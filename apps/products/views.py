@@ -94,9 +94,21 @@ class ProductViewSet(viewsets.ModelViewSet):
         if not self.request.user.is_staff:
             queryset = queryset.filter(is_active=True)
         
-        # Calculer le stock selon le contexte de l'utilisateur
+        # Filtrage selon access_scope
         user = self.request.user
+        user_role = getattr(user, 'role', None)
+        access_scope = user_role.access_scope if user_role else 'own'
         
+        if not user.is_superuser:
+            if access_scope == 'own':
+                # Propres données uniquement - voir seulement les produits créés par l'utilisateur
+                queryset = queryset.filter(created_by=user)
+            elif access_scope == 'assigned':
+                # Points de vente assignés - pas de filtre supplémentaire sur les produits
+                # (les produits sont globaux, seul le stock varie par magasin)
+                pass
+        
+        # Calculer le stock selon le contexte de l'utilisateur
         # Si l'utilisateur a des magasins assignés, afficher le stock de son premier magasin
         user_stores = user.assigned_stores.all()
         

@@ -197,3 +197,86 @@ Connectez-vous à l'interface admin pour répondre au message.
     except Exception as exc:
         logger.error(f"[ERREUR] Erreur lors de l'envoi de la notification admin: {exc}")
         return {'success': False, 'error': str(exc)}
+
+
+@shared_task(bind=True, max_retries=3)
+def send_registration_confirmation_email(self, user_data, company_data, subscription_data):
+    """
+    Tâche asynchrone pour envoyer l'email de confirmation d'inscription
+    
+    Args:
+        user_data: Dict avec email, first_name, last_name, password
+        company_data: Dict avec name, schema_name, domain_name, plan
+        subscription_data: Dict avec payment_amount, trial_days, duration, renewal_price, subscription_end_date, access_url
+    """
+    try:
+        from django.core.mail import send_mail
+        
+        # Noms des plans
+        plan_names = {
+            'starter': 'Pack 1 - Starter',
+            'business': 'Pack 2 - Business',
+            'enterprise': 'Pack 3 - Enterprise'
+        }
+        
+        plan_name = plan_names.get(company_data.get('plan', 'starter'), company_data.get('plan', 'starter'))
+        
+        email_subject = f"🎉 Bienvenue sur SG-STOCK - {company_data['name']}"
+        email_body = f"""
+Bonjour {user_data['first_name']} {user_data['last_name']},
+
+Félicitations ! Votre inscription à SG-STOCK a été confirmée avec succès.
+
+📋 INFORMATIONS DE VOTRE COMPTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Entreprise      : {company_data['name']}
+• Email           : {user_data['email']}
+• Pack choisi     : {plan_name}
+• Montant payé    : {subscription_data['payment_amount']:,.0f} FCFA
+
+🎁 VOTRE ABONNEMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Période gratuite : {subscription_data['trial_days']} jours
+• Durée totale     : {subscription_data['trial_days']} jours gratuit + {subscription_data['duration']} jours = {subscription_data['trial_days'] + subscription_data['duration']} jours
+• Date d'expiration: {subscription_data['subscription_end_date']}
+• Renouvellement   : {subscription_data['renewal_price']:,.0f} FCFA/an
+
+🔗 ACCÉDER À VOTRE APPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Connectez-vous dès maintenant à votre espace de gestion :
+👉 {subscription_data['access_url']}
+
+🔐 VOS IDENTIFIANTS DE CONNEXION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Identifiant (Email) : {user_data['email']}
+• Mot de passe        : {user_data.get('password', 'Le mot de passe que vous avez créé')}
+
+⚠️ IMPORTANT : Conservez précieusement ces identifiants !
+Vous en aurez besoin pour accéder à votre application SG-STOCK.
+
+📞 BESOIN D'AIDE ?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Notre équipe est à votre disposition :
+• Email : support@sgstock.com
+• Tél   : +237 123 456 789
+
+Merci de votre confiance !
+
+L'équipe SG-STOCK
+        """
+        
+        send_mail(
+            subject=email_subject,
+            message=email_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user_data['email']],
+            fail_silently=False,
+        )
+        
+        logger.info(f"[OK] Email de confirmation envoyé à {user_data['email']} pour {company_data['name']}")
+        return {'success': True, 'email': user_data['email']}
+        
+    except Exception as exc:
+        logger.error(f"[ERREUR] Erreur lors de l'envoi de l'email d'inscription à {user_data.get('email')}: {exc}")
+        # Retry automatique avec délai exponentiel
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))

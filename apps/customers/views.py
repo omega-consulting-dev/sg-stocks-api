@@ -86,9 +86,17 @@ class CustomerViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user.is_superuser:
             if hasattr(user, 'role') and user.role:
-                if not user.role.can_manage_customers:
-                    from rest_framework.exceptions import PermissionDenied
-                    raise PermissionDenied("Vous n'avez pas la permission de créer des clients.")
+                # Permettre aux utilisateurs avec can_manage_sales de créer des clients de passage
+                # (clients sans email pour ventes rapides)
+                customer_name = serializer.validated_data.get('name', '').lower()
+                is_no_name_customer = 'no name' in customer_name or 'passage' in customer_name
+                
+                # Si ce n'est pas un client de passage, vérifier can_manage_customers
+                if not is_no_name_customer and not user.role.can_manage_customers:
+                    # Mais si l'utilisateur peut gérer les ventes, on autorise quand même
+                    if not user.role.can_manage_sales:
+                        from rest_framework.exceptions import PermissionDenied
+                        raise PermissionDenied("Vous n'avez pas la permission de créer des clients.")
         
         serializer.save(created_by=self.request.user)
     

@@ -11,7 +11,6 @@ from .serializers_contact import (
     ContactMessageResponseSerializer
 )
 from .tasks import send_contact_response_email, send_new_contact_notification
-from .emails import send_contact_response_email, send_new_contact_notification
 
 
 class ContactMessageViewSet(viewsets.ModelViewSet):
@@ -85,12 +84,22 @@ class ContactMessageViewSet(viewsets.ModelViewSet):
                 'message': message.message,
             }
             
-            # Lancer la tâche Celery en arrière-plan
-            task = send_contact_response_email.delay(contact_data, response_text)
+            # Lancer la tâche Celery et attendre le résultat
+            try:
+                task = send_contact_response_email.delay(contact_data, response_text)
+                # Attendre le résultat pendant 10 secondes maximum
+                result = task.get(timeout=10)
+                email_sent = result.get('success', False)
+                email_error = None
+            except Exception as e:
+                email_sent = False
+                email_error = str(e)
             
             return Response({
                 'success': True,
-                'message': 'Réponse enregistrée et email envoyé en arrière-plan',
+                'message': 'Réponse enregistrée',
+                'email_sent': email_sent,
+                'email_error': email_error if not email_sent else None,
                 'task_id': task.id,
                 'data': ContactMessageSerializer(message).data
             })

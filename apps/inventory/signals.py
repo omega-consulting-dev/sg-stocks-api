@@ -179,6 +179,17 @@ def notify_stock_issues(sender, instance, created, update_fields, **kwargs):
             logger.info(f"[STOCK] Notification stock faible envoyée à {user.username}")
     else:
         logger.info(f"[STOCK] [OK] Stock OK pour {product.name} dans {store.name} ({stock_quantity} > {product.minimum_stock})")
+        
+        # Stock redevenu suffisant: marquer comme lues les notifications de stock bas/rupture pour ce produit
+        from apps.accounts.models import Notification
+        updated_count = Notification.objects.filter(
+            type__in=['stock_rupture', 'stock_low'],
+            data__product_id=product.id,
+            is_read=False
+        ).update(is_read=True)
+        
+        if updated_count > 0:
+            logger.info(f"[STOCK] ✅ {updated_count} notification(s) de stock marquée(s) comme lue(s) pour {product.name}")
 
 
 @receiver(pre_save, sender=Stock)

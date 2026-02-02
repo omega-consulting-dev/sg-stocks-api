@@ -16,6 +16,8 @@ class DomainSerializer(serializers.ModelSerializer):
 
 class CompanySerializer(serializers.ModelSerializer):
     domains = DomainSerializer(many=True, read_only=True)
+    total_users_count = serializers.SerializerMethodField()
+    storage_used_mb = serializers.SerializerMethodField()
     
     class Meta:
         model = Company
@@ -28,12 +30,55 @@ class CompanySerializer(serializers.ModelSerializer):
             'feature_advanced_analytics', 'feature_api_access',
             'trial_end_date', 'subscription_end_date',
             'monthly_price', 'last_payment_date', 'next_billing_date',
-            # Usage metrics
+            # Tarification différenciée
+            'first_payment_price', 'renewal_price', 'subscription_duration_days',
+            'trial_days', 'is_first_payment',
+            # Usage metrics (dynamically calculated)
             'storage_used_mb', 'total_users_count', 'total_products_count',
             # Settings
             'currency', 'tax_rate', 'allow_flexible_pricing'
         )
         read_only_fields = ('schema_name', 'created_on')
+    
+    def get_total_users_count(self, obj):
+        """Calcule dynamiquement le nombre d'utilisateurs actifs du tenant."""
+        from django_tenants.utils import schema_context
+        from apps.accounts.models import User
+        
+        try:
+            with schema_context(obj.schema_name):
+                return User.objects.filter(is_active=True).count()
+        except Exception:
+            return 0
+    
+    def get_storage_used_mb(self, obj):
+        """Calcule dynamiquement l'espace de stockage utilisé (approximatif)."""
+        from django_tenants.utils import schema_context
+        from django.db import connection
+        
+        try:
+            with schema_context(obj.schema_name):
+                # Calculer la taille approximative de la base de données pour ce tenant
+                with connection.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT pg_size_pretty(pg_database_size(current_database()));
+                    """)
+                    size_str = cursor.fetchone()[0]
+                    
+                    # Convertir en MB (approximatif)
+                    # Format attendu: "123 MB" ou "1234 kB" ou "12 GB"
+                    if 'kB' in size_str:
+                        size_kb = float(size_str.replace(' kB', ''))
+                        return round(size_kb / 1024, 2)
+                    elif 'MB' in size_str:
+                        return float(size_str.replace(' MB', ''))
+                    elif 'GB' in size_str:
+                        size_gb = float(size_str.replace(' GB', ''))
+                        return round(size_gb * 1024, 2)
+                    else:
+                        return 0
+        except Exception:
+            return 0
 
 
 class TenantProvisioningSerializer(serializers.Serializer):
@@ -115,12 +160,46 @@ class TenantProvisioningSerializer(serializers.Serializer):
         plan = validated_data["plan"]
 
         # Déterminer les limites selon le plan
-        plan_map = {
-            'starter': (3, 1),
-            'business': (10, 3),
-            'enterprise': (25, 10)
+        plan_configs = {
+            'starter': {
+                'max_users': 10,
+                'max_stores': 1,
+                'max_warehouses': 0,
+                'max_products': 999999,
+                'max_storage_mb': 15360,  # 15 Go
+                # Tarification Pack 1
+                'first_payment_price': Decimal('229900.00'),  # 1er paiement
+                'renewal_price': Decimal('100000.00'),        # Renouvellement après 1 an
+                'subscription_duration_days': 365,            # 1 an
+                'trial_days': 14,                             # 14 jours gratuit
+            },
+            'business': {
+                'max_users': 15,
+                'max_stores': 1,
+                'max_warehouses': 1,
+                'max_products': 999999,
+                'max_storage_mb': 30720,  # 30 Go
+                # Tarification Pack 2
+                'first_payment_price': Decimal('449900.00'),  # 1er paiement
+                'renewal_price': Decimal('150000.00'),        # Renouvellement après 1 an
+                'subscription_duration_days': 365,            # 1 an
+                'trial_days': 14,                             # 14 jours gratuit
+            },
+            'enterprise': {
+                'max_users': 200,
+                'max_stores': 999999,
+                'max_warehouses': 999999,
+                'max_products': 999999,
+                'max_storage_mb': 51200,  # 50 Go
+                # Tarification Pack 3
+                'first_payment_price': Decimal('699900.00'),  # 1er paiement
+                'renewal_price': Decimal('250000.00'),        # Renouvellement après 1 an
+                'subscription_duration_days': 365,            # 1 an
+                'trial_days': 14,                             # 14 jours gratuit
+            }
         }
-        max_users, max_stores = plan_map.get(plan, (3, 1))
+        
+        plan_config = plan_configs.get(plan, plan_configs['starter'])
 
         # Création du tenant (rapide - juste la table publique)
         company_data = {
@@ -130,13 +209,22 @@ class TenantProvisioningSerializer(serializers.Serializer):
             'phone': validated_data.get("phone"),
             'address': validated_data.get("address"),
             'plan': plan,
-            'max_users': max_users,
-            'max_stores': max_stores,
+            'max_users': plan_config['max_users'],
+            'max_stores': plan_config['max_stores'],
+            'max_warehouses': plan_config['max_warehouses'],
+            'max_products': plan_config['max_products'],
+            'max_storage_mb': plan_config['max_storage_mb'],
             'feature_services': validated_data.get("feature_services", False),
             'feature_multi_store': validated_data.get("feature_multi_store", False),
             'feature_loans': validated_data.get("feature_loans", False),
             'feature_advanced_analytics': validated_data.get("feature_advanced_analytics", False),
             'feature_api_access': validated_data.get("feature_api_access", False),
+            # Configuration de la tarification
+            'first_payment_price': plan_config.get('first_payment_price', Decimal('0.00')),
+            'renewal_price': plan_config.get('renewal_price', Decimal('0.00')),
+            'subscription_duration_days': plan_config.get('subscription_duration_days', 365),
+            'trial_days': plan_config.get('trial_days', 14),
+            'is_first_payment': True,  # C'est la première inscription
             'is_active': False,  # Sera activé après le provisioning
             'provisioning_status': 'pending',
         }

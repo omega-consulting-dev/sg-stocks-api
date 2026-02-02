@@ -14,6 +14,7 @@ from apps.accounts.views import (
     UserSessionViewSet,
     UserActivityViewSet,
 )
+from apps.main.views_registration import register_tenant
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -28,6 +29,9 @@ urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
     path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('verify/', TokenVerifyView.as_view(), name='token_verify'),
+    
+    # Registration
+    path('register-tenant/', register_tenant, name='register-tenant'),
 
     # Router URLs
     path('', include(router.urls)),

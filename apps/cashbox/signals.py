@@ -88,23 +88,9 @@ def update_cashbox_on_invoice_payment(sender, instance, created, **kwargs):
                 cashbox.save(update_fields=['current_balance'])
 
 
-@receiver(post_save, sender='suppliers.SupplierPayment')
-def update_cashbox_on_supplier_payment(sender, instance, created, **kwargs):
-    """
-    Met à jour le solde de la caisse quand un paiement fournisseur en espèces est effectué.
-    """
-    from apps.cashbox.models import Cashbox
-    
-    if created and instance.payment_method == 'cash' and instance.purchase_order and instance.purchase_order.store:
-        cashbox = Cashbox.objects.filter(
-            store=instance.purchase_order.store,
-            is_active=True
-        ).first()
-        
-        if cashbox:
-            with transaction.atomic():
-                cashbox.current_balance -= instance.amount
-                cashbox.save(update_fields=['current_balance'])
+# Signal supprimé: update_cashbox_on_supplier_payment
+# La mise à jour du solde de la caisse est déjà gérée dans suppliers/serializers.py ligne 288
+# pour éviter le double débit (voir SupplierPaymentSerializer.create())
 
 
 @receiver(post_save, sender='cashbox.CashMovement')
@@ -128,24 +114,7 @@ def update_cashbox_on_cash_movement(sender, instance, created, **kwargs):
             cashbox.save(update_fields=['current_balance'])
 
 
-@receiver(post_save, sender='loans.LoanPayment')
-def update_cashbox_on_loan_payment(sender, instance, created, **kwargs):
-    """
-    Met à jour le solde de la caisse quand un paiement d'emprunt en espèces est effectué.
-    IMPORTANT: Pour un admin sans point de vente assigné, le paiement ne débitera aucune caisse
-    si le prêt n'a pas de store associé.
-    """
-    from apps.cashbox.models import Cashbox
-    
-    if created and instance.payment_method == 'cash' and instance.loan.store:
-        cashbox = Cashbox.objects.filter(
-            store=instance.loan.store,
-            is_active=True
-        ).first()
-        
-        if cashbox:
-            with transaction.atomic():
-                # Débiter la caisse du montant du paiement
-                cashbox.current_balance -= instance.amount
-                cashbox.save(update_fields=['current_balance'])
+# Signal supprimé: update_cashbox_on_loan_payment
+# La mise à jour du solde de la caisse est déjà gérée dans loans/views.py lors de la création du paiement
+# pour éviter le double débit (voir ligne 229 de loans/views.py)
 

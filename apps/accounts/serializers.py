@@ -137,8 +137,8 @@ class RoleSerializer(serializers.ModelSerializer):
             'can_manage_inventory', 'can_view_inventory',
             'can_manage_sales', 'can_manage_customers',
             'can_manage_suppliers', 'can_manage_cashbox', 'can_manage_bank',
-            'can_manage_loans', 'can_manage_expenses', 'can_view_analytics', 
-            'can_export_data', 'permissions_count', 'users_count', 
+            'can_manage_mobile_money', 'can_manage_loans', 'can_manage_expenses', 
+            'can_view_analytics', 'can_export_data', 'permissions_count', 'users_count', 
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at', 'permissions_count', 'users_count']
@@ -171,15 +171,28 @@ class UserListSerializer(serializers.ModelSerializer):
     
     role_name = serializers.CharField(source='role.display_name', read_only=True)
     display_name = serializers.CharField(source='get_display_name', read_only=True)
+    assigned_stores_count = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
             'display_name', 'phone', 'avatar', 'employee_id',
-            'role', 'role_name', 'assigned_stores',
+            'role', 'role_name', 'assigned_stores_count',
             'is_active', 'is_staff', 'is_superuser', 'last_login', 'date_joined'
         ]
+    
+    def get_assigned_stores_count(self, obj):
+        """Retourne le nombre de stores assignés (0 si schéma public)."""
+        from django.db import connection
+        
+        if connection.schema_name == 'public':
+            return 0
+        
+        try:
+            return obj.assigned_stores.count()
+        except:
+            return 0
 
 
 class UserDetailSerializer(serializers.ModelSerializer):
@@ -190,8 +203,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
     assigned_stores_list = serializers.SerializerMethodField()
     display_name = serializers.CharField(source='get_display_name', read_only=True)
     default_store = serializers.SerializerMethodField()
-    has_assigned_stores = serializers.BooleanField(source='has_assigned_stores', read_only=True)
-    is_store_restricted = serializers.BooleanField(source='is_store_restricted', read_only=True)
+    has_assigned_stores = serializers.SerializerMethodField()
+    is_store_restricted = serializers.SerializerMethodField()
     
     class Meta:
         model = User
@@ -216,16 +229,46 @@ class UserDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['date_joined', 'last_login', 'created_at', 'updated_at']
     
     def get_assigned_stores_list(self, obj):
+        from django.db import connection
+        
+        # Ne charger les stores que si on est dans un schéma tenant
+        if connection.schema_name == 'public':
+            return []
+        
         from apps.inventory.serializers import StoreMinimalSerializer
         return StoreMinimalSerializer(obj.assigned_stores.all(), many=True).data
     
     def get_default_store(self, obj):
         """Return default store ID for store-restricted users."""
+        from django.db import connection
+        
+        # Ne charger les stores que si on est dans un schéma tenant
+        if connection.schema_name == 'public':
+            return None
+        
         default_store = obj.get_default_store()
         if default_store:
             from apps.inventory.serializers import StoreMinimalSerializer
             return StoreMinimalSerializer(default_store).data
         return None
+    
+    def get_has_assigned_stores(self, obj):
+        """Check if user has assigned stores."""
+        from django.db import connection
+        
+        if connection.schema_name == 'public':
+            return False
+        
+        return obj.has_assigned_stores()
+    
+    def get_is_store_restricted(self, obj):
+        """Check if user is store restricted."""
+        from django.db import connection
+        
+        if connection.schema_name == 'public':
+            return False
+        
+        return obj.is_store_restricted()
 
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer for user creation."""
@@ -306,6 +349,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     """Serializer for user update."""
     
     employee_id = serializers.CharField(read_only=True)
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        style={'input_type': 'password'}
+    )
     
     class Meta:
         model = User
@@ -320,24 +369,42 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             # Contact d'urgence
             'emergency_contact_name', 'emergency_contact_phone',
             
+            'password',
             'is_active', 'notes'
         ]
     
+    def validate_password(self, value):
+        """Valider le mot de passe uniquement s'il est fourni."""
+        if value and value.strip():
+            # Valider uniquement si le mot de passe n'est pas vide
+            validate_password(value)
+            return value
+        # Si vide, retourner None pour l'ignorer
+        return None
+    
     def update(self, instance, validated_data):
         """Update user."""
+        from django.db import connection
+        
         secondary_roles = validated_data.pop('secondary_roles', None)
         assigned_stores = validated_data.pop('assigned_stores', None)
+        password = validated_data.pop('password', None)
         
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+        
+        # Mettre à jour le mot de passe seulement s'il est fourni et non None
+        if password is not None and password:
+            instance.set_password(password)
+        
         instance.save()
         
         # Mettre à jour les rôles secondaires
         if secondary_roles is not None:
             instance.secondary_roles.set(secondary_roles)
         
-        # Mettre à jour les magasins assignés
-        if assigned_stores is not None:
+        # Mettre à jour les magasins assignés uniquement si on n'est pas dans le schéma public
+        if assigned_stores is not None and connection.schema_name != 'public':
             instance.assigned_stores.set(assigned_stores)
         
         return instance

@@ -2,6 +2,7 @@
 Views for field configuration management.
 """
 
+import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,6 +15,9 @@ from core.serializers_field_config import (
     FieldConfigurationSerializer,
     FieldConfigurationBulkUpdateSerializer
 )
+from core.field_config_defaults import get_default_field_configurations
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema_view(
@@ -32,6 +36,26 @@ class FieldConfigurationViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['form_name', 'is_visible', 'is_required']
     
+    def list(self, request, *args, **kwargs):
+        """Override list to auto-initialize configurations if they don't exist."""
+        # Check if configurations exist
+        if not FieldConfiguration.objects.exists():
+            # Auto-initialize default configurations
+            default_configs = get_default_field_configurations()
+            created_count = 0
+            
+            for config_data in default_configs:
+                FieldConfiguration.objects.get_or_create(
+                    form_name=config_data['form_name'],
+                    field_name=config_data['field_name'],
+                    defaults=config_data
+                )
+                created_count += 1
+            
+            logger.info(f"✅ Auto-initialized {created_count} field configurations")
+        
+        return super().list(request, *args, **kwargs)
+    
     @extend_schema(summary="Initialiser les configurations par défaut", tags=["Settings"])
     @action(detail=False, methods=['post'])
     def initialize_defaults(self, request):
@@ -40,94 +64,8 @@ class FieldConfigurationViewSet(viewsets.ModelViewSet):
         # Get force parameter to decide whether to update existing configs
         force = request.data.get('force', False)
         
-        default_configs = [
-            # Product form
-            {'form_name': 'product', 'field_name': 'name', 'field_label': 'Nom du produit', 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'product', 'field_name': 'reference', 'field_label': 'Référence', 'is_visible': True, 'is_required': False, 'display_order': 2},
-            {'form_name': 'product', 'field_name': 'category', 'field_label': 'Catégorie', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'product', 'field_name': 'purchase_price', 'field_label': "Prix d'achat", 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'product', 'field_name': 'sale_price', 'field_label': 'Prix de vente', 'is_visible': True, 'is_required': True, 'display_order': 5},
-            {'form_name': 'product', 'field_name': 'minimum_stock', 'field_label': 'Stock minimum', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'product', 'field_name': 'description', 'field_label': 'Description', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'product', 'field_name': 'barcode', 'field_label': 'Code-barres', 'is_visible': True, 'is_required': False, 'display_order': 8},
-            
-            # Customer form
-            {'form_name': 'customer', 'field_name': 'name', 'field_label': 'Nom / Raison sociale', 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'customer', 'field_name': 'email', 'field_label': 'Email', 'is_visible': True, 'is_required': False, 'display_order': 2},
-            {'form_name': 'customer', 'field_name': 'phone', 'field_label': 'Téléphone', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'customer', 'field_name': 'mobile', 'field_label': 'Mobile', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'customer', 'field_name': 'address', 'field_label': 'Adresse', 'is_visible': True, 'is_required': False, 'display_order': 5},
-            {'form_name': 'customer', 'field_name': 'city', 'field_label': 'Ville', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'customer', 'field_name': 'postal_code', 'field_label': 'Code postal', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'customer', 'field_name': 'country', 'field_label': 'Pays', 'is_visible': True, 'is_required': False, 'display_order': 8},
-            {'form_name': 'customer', 'field_name': 'billing_address', 'field_label': 'Adresse de facturation', 'is_visible': True, 'is_required': False, 'display_order': 9},
-            {'form_name': 'customer', 'field_name': 'tax_id', 'field_label': 'Numéro fiscal', 'is_visible': True, 'is_required': False, 'display_order': 10},
-            {'form_name': 'customer', 'field_name': 'payment_term', 'field_label': 'Conditions de paiement', 'is_visible': True, 'is_required': False, 'display_order': 11},
-            {'form_name': 'customer', 'field_name': 'credit_limit', 'field_label': 'Limite de crédit', 'is_visible': True, 'is_required': False, 'display_order': 12},
-            {'form_name': 'customer', 'field_name': 'notes', 'field_label': 'Notes', 'is_visible': True, 'is_required': False, 'display_order': 13},
-            
-            # Supplier form
-            {'form_name': 'supplier', 'field_name': 'name', 'field_label': 'Raison sociale', 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'supplier', 'field_name': 'contact_person', 'field_label': 'Contact principal', 'is_visible': True, 'is_required': False, 'display_order': 2},
-            {'form_name': 'supplier', 'field_name': 'email', 'field_label': 'Email', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'supplier', 'field_name': 'phone', 'field_label': 'Téléphone', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'supplier', 'field_name': 'mobile', 'field_label': 'Mobile', 'is_visible': True, 'is_required': False, 'display_order': 5},
-            {'form_name': 'supplier', 'field_name': 'website', 'field_label': 'Site web', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'supplier', 'field_name': 'address', 'field_label': 'Adresse', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'supplier', 'field_name': 'city', 'field_label': 'Ville', 'is_visible': True, 'is_required': False, 'display_order': 8},
-            {'form_name': 'supplier', 'field_name': 'postal_code', 'field_label': 'Code postal', 'is_visible': True, 'is_required': False, 'display_order': 9},
-            {'form_name': 'supplier', 'field_name': 'country', 'field_label': 'Pays', 'is_visible': True, 'is_required': False, 'display_order': 10},
-            {'form_name': 'supplier', 'field_name': 'tax_id', 'field_label': 'Numéro fiscal', 'is_visible': True, 'is_required': False, 'display_order': 11},
-            {'form_name': 'supplier', 'field_name': 'bank_account', 'field_label': 'Compte bancaire', 'is_visible': True, 'is_required': False, 'display_order': 12},
-            {'form_name': 'supplier', 'field_name': 'payment_term', 'field_label': 'Conditions de paiement', 'is_visible': True, 'is_required': False, 'display_order': 13},
-            {'form_name': 'supplier', 'field_name': 'rating', 'field_label': 'Évaluation', 'is_visible': True, 'is_required': False, 'display_order': 14},
-            {'form_name': 'supplier', 'field_name': 'notes', 'field_label': 'Notes', 'is_visible': True, 'is_required': False, 'display_order': 15},
-            
-            # Invoice (product) form
-            {'form_name': 'invoice', 'field_name': 'customer', 'field_label': 'Client', 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'invoice', 'field_name': 'saleDate', 'field_label': 'Date de vente', 'is_visible': True, 'is_required': True, 'display_order': 2},
-            {'form_name': 'invoice', 'field_name': 'paymentMethod', 'field_label': 'Mode de paiement', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'invoice', 'field_name': 'paymentTerm', 'field_label': 'Terme de paiement', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'invoice', 'field_name': 'tax', 'field_label': 'TVA (%)', 'is_visible': True, 'is_required': False, 'display_order': 5},
-            {'form_name': 'invoice', 'field_name': 'amountPaid', 'field_label': 'Montant payé', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'invoice', 'field_name': 'acompte', 'field_label': 'Acompte', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'invoice', 'field_name': 'dueDate', 'field_label': "Date d'échéance", 'is_visible': True, 'is_required': False, 'display_order': 8},
-            {'form_name': 'invoice', 'field_name': 'notes', 'field_label': 'Notes', 'is_visible': True, 'is_required': False, 'display_order': 9},
-            
-            # Invoice Service form
-            {'form_name': 'invoice_service', 'field_name': 'customer', 'field_label': 'Client', 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'invoice_service', 'field_name': 'saleDate', 'field_label': 'Date de vente', 'is_visible': True, 'is_required': True, 'display_order': 2},
-            {'form_name': 'invoice_service', 'field_name': 'paymentMethod', 'field_label': 'Mode de paiement', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'invoice_service', 'field_name': 'paymentTerm', 'field_label': 'Terme de paiement', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'invoice_service', 'field_name': 'tax', 'field_label': 'TVA (%)', 'is_visible': True, 'is_required': False, 'display_order': 5},
-            {'form_name': 'invoice_service', 'field_name': 'amountPaid', 'field_label': 'Montant payé', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'invoice_service', 'field_name': 'acompte', 'field_label': 'Acompte', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'invoice_service', 'field_name': 'dueDate', 'field_label': "Date d'échéance", 'is_visible': True, 'is_required': False, 'display_order': 8},
-            {'form_name': 'invoice_service', 'field_name': 'notes', 'field_label': 'Notes', 'is_visible': True, 'is_required': False, 'display_order': 9},
-            
-            # Loan form
-            {'form_name': 'loan', 'field_name': 'loan_type', 'field_label': "Type d'emprunt", 'is_visible': True, 'is_required': True, 'display_order': 1},
-            {'form_name': 'loan', 'field_name': 'lender_name', 'field_label': 'Nom du prêteur', 'is_visible': True, 'is_required': True, 'display_order': 2},
-            {'form_name': 'loan', 'field_name': 'lender_contact', 'field_label': 'Contact prêteur', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'loan', 'field_name': 'store', 'field_label': 'Point de vente', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'loan', 'field_name': 'principal_amount', 'field_label': 'Montant emprunté', 'is_visible': True, 'is_required': True, 'display_order': 5},
-            {'form_name': 'loan', 'field_name': 'interest_rate', 'field_label': "Taux d'intérêt (%)", 'is_visible': True, 'is_required': True, 'display_order': 6},
-            {'form_name': 'loan', 'field_name': 'duration_months', 'field_label': 'Durée (mois)', 'is_visible': True, 'is_required': True, 'display_order': 7},
-            {'form_name': 'loan', 'field_name': 'start_date', 'field_label': 'Date de début', 'is_visible': True, 'is_required': True, 'display_order': 8},
-            {'form_name': 'loan', 'field_name': 'end_date', 'field_label': 'Date de fin', 'is_visible': True, 'is_required': True, 'display_order': 9},
-            {'form_name': 'loan', 'field_name': 'purpose', 'field_label': 'Objet du prêt', 'is_visible': True, 'is_required': False, 'display_order': 10},
-            {'form_name': 'loan', 'field_name': 'notes', 'field_label': 'Notes', 'is_visible': True, 'is_required': False, 'display_order': 11},
-            
-            # Loan table
-            {'form_name': 'loan_table', 'field_name': 'loan_number', 'field_label': 'N° Emprunt', 'is_visible': True, 'is_required': False, 'display_order': 1},
-            {'form_name': 'loan_table', 'field_name': 'lender_name', 'field_label': 'Prêteur', 'is_visible': True, 'is_required': False, 'display_order': 2},
-            {'form_name': 'loan_table', 'field_name': 'loan_type', 'field_label': 'Type', 'is_visible': True, 'is_required': False, 'display_order': 3},
-            {'form_name': 'loan_table', 'field_name': 'start_date', 'field_label': 'Date', 'is_visible': True, 'is_required': False, 'display_order': 4},
-            {'form_name': 'loan_table', 'field_name': 'principal_amount', 'field_label': 'Montant Principal', 'is_visible': True, 'is_required': False, 'display_order': 5},
-            {'form_name': 'loan_table', 'field_name': 'interest_rate', 'field_label': 'Taux (%)', 'is_visible': True, 'is_required': False, 'display_order': 6},
-            {'form_name': 'loan_table', 'field_name': 'balance_due', 'field_label': 'Solde Restant', 'is_visible': True, 'is_required': False, 'display_order': 7},
-            {'form_name': 'loan_table', 'field_name': 'status', 'field_label': 'Statut', 'is_visible': True, 'is_required': False, 'display_order': 8},
-        ]
+        # Get default configurations from centralized source
+        default_configs = get_default_field_configurations()
         
         created_count = 0
         updated_count = 0
@@ -183,10 +121,13 @@ class FieldConfigurationViewSet(viewsets.ModelViewSet):
         
         for config_data in serializer.validated_data['configurations']:
             config_id = config_data.pop('id')
+            
             try:
                 config = FieldConfiguration.objects.get(id=config_id)
+                
                 for key, value in config_data.items():
                     setattr(config, key, value)
+                
                 config.save()
                 updated_count += 1
             except FieldConfiguration.DoesNotExist:

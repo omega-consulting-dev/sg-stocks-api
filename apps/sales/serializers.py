@@ -137,6 +137,16 @@ class SaleCreateSerializer(serializers.ModelSerializer):
     
     lines = SaleLineSerializer(many=True)
     paid_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
+    payment_method = serializers.ChoiceField(
+        choices=[
+            ('cash', 'Espèces'),
+            ('card', 'Carte'),
+            ('transfer', 'Virement'),
+            ('mobile_money', 'Mobile Money (MTN/Orange)')
+        ],
+        required=False,
+        default='cash'
+    )
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Customer.objects.all(),
         required=False,
@@ -146,12 +156,13 @@ class SaleCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sale
         fields = [
-            'customer', 'store', 'sale_date', 'discount_amount', 'paid_amount', 'notes', 'lines'
+            'customer', 'store', 'sale_date', 'discount_amount', 'paid_amount', 'payment_method', 'notes', 'lines'
         ]
     
     def create(self, validated_data):
         lines_data = validated_data.pop('lines')
         paid_amount = validated_data.pop('paid_amount', 0)
+        payment_method = validated_data.pop('payment_method', 'cash')
         customer = validated_data.get('customer')
         
         # Si aucun client n'est fourni, créer ou récupérer un client "Client No Name"
@@ -179,8 +190,9 @@ class SaleCreateSerializer(serializers.ModelSerializer):
         if paid_amount:
             paid_amount = Decimal(str(paid_amount)).quantize(Decimal('0.01'))
         
-        # Set paid_amount in validated_data
+        # Set paid_amount and payment_method in validated_data
         validated_data['paid_amount'] = paid_amount
+        validated_data['payment_method'] = payment_method
         
         # Extraire l'année de la sale_date fournie
         sale_date = validated_data.get('sale_date')

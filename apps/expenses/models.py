@@ -69,10 +69,10 @@ class Expense(AuditModel):
     # Payment
     PAYMENT_METHOD_CHOICES = [
         ('cash', 'Espèces'),
-        ('bank_transfer', 'Virement bancaire'),
-        ('check', 'Chèque'),
-        ('mobile_money', 'Mobile Money'),
         ('card', 'Carte bancaire'),
+        ('bank_transfer', 'Virement bancaire'),
+        ('mobile_money', 'Mobile Money (MTN/Orange)'),
+        ('check', 'Chèque'),
     ]
     payment_method = models.CharField(
         max_length=20,

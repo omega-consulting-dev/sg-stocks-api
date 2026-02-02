@@ -139,7 +139,9 @@ class CashMovement(AuditModel):
         CashboxSession,
         on_delete=models.PROTECT,
         related_name='movements',
-        verbose_name="Session de caisse"
+        verbose_name="Session de caisse",
+        null=True,
+        blank=True
     )
     
     # Movement details
@@ -165,9 +167,9 @@ class CashMovement(AuditModel):
     PAYMENT_METHOD_CHOICES = [
         ('cash', 'Espèces'),
         ('card', 'Carte bancaire'),
-        ('mobile_money', 'Mobile Money'),
-        ('check', 'Chèque'),
         ('bank_transfer', 'Virement'),
+        ('mobile_money', 'Mobile Money (MTN/Orange)'),
+        ('check', 'Chèque'),
     ]
     payment_method = models.CharField(
         max_length=20,

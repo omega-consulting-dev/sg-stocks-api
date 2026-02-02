@@ -51,8 +51,8 @@ class Command(BaseCommand):
             
             # Calculer le montant selon le plan
             amount = company.monthly_price
-            tax_amount = amount * Decimal('0.1925')  # TVA 19.25%
-            total_amount = amount + tax_amount
+            tax_amount = Decimal('0')  # Pas de TVA
+            total_amount = amount  # Total = Montant HT
             
             # Créer la facture
             billing = CompanyBilling.objects.create(

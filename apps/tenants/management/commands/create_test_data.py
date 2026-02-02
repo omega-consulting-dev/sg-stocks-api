@@ -56,8 +56,8 @@ class Command(BaseCommand):
                     invoice_date=invoice_date,
                     due_date=due_date,
                     amount=company.monthly_price,
-                    tax_amount=company.monthly_price * Decimal('0.1925'),
-                    total_amount=company.monthly_price * Decimal('1.1925'),
+                    tax_amount=Decimal('0'),  # Pas de TVA
+                    total_amount=company.monthly_price,  # Total = Montant HT
                     status=status,
                     payment_date=payment_date,
                     payment_method='bank_transfer' if status == 'paid' else ''

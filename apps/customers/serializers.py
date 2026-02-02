@@ -72,12 +72,13 @@ class CustomerCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Customer
         fields = [
-            'customer_code', 'name', 'email', 'phone', 'mobile',
+            'id', 'customer_code', 'name', 'email', 'phone', 'mobile',
             'address', 'city', 'postal_code', 'country',
             'billing_address', 'tax_id',
             'payment_term', 'credit_limit',
             'notes', 'user', 'is_active'
         ]
+        read_only_fields = ['id']
     
     def validate_customer_code(self, value):
         """Ensure customer code is unique."""

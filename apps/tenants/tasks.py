@@ -85,7 +85,21 @@ def provision_tenant_async(self, company_id, admin_data):
         
         logger.info(f"[OK] Rôles créés")
         
-        # Étape 3: Création de l'utilisateur administrateur
+        # Étape 3: Initialisation des configurations de champs
+        try:
+            from core.models_field_config import FieldConfiguration
+            from core.field_config_defaults import get_default_field_configurations
+            
+            existing_count = FieldConfiguration.objects.count()
+            
+            if existing_count == 0:
+                default_configs = get_default_field_configurations()
+                for config_data in default_configs:
+                    FieldConfiguration.objects.create(**config_data)
+        except Exception:
+            pass  # Ne pas bloquer le provisioning si les configs échouent
+        
+        # Étape 4: Création de l'utilisateur administrateur
         logger.info(f"👤 Création de l'utilisateur admin...")
         
         admin_user = User.objects.create_user(

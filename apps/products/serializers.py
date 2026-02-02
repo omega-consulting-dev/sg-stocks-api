@@ -52,7 +52,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'reference', 'name', 'category', 'category_name', 
-            'selling_price', 'minimum_stock', 'optimal_stock',
+            'cost_price', 'selling_price', 'minimum_stock', 'optimal_stock',
             'primary_image', 'current_stock', 'is_low_stock', 
             'is_active', 'is_for_sale'
         ]
@@ -117,11 +117,12 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         """Validate product data."""
-        # Validate cost price <= selling price
+        # Validate cost price <= selling price (seulement si selling_price > 0)
         cost_price = data.get('cost_price', 0)
         selling_price = data.get('selling_price', 0)
         
-        if cost_price > selling_price:
+        # Ne valider que si le prix de vente est défini et supérieur à 0
+        if selling_price > 0 and cost_price > selling_price:
             raise serializers.ValidationError({
                 'selling_price': 'Le prix de vente doit être supérieur au prix d\'achat.'
             })

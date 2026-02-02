@@ -102,8 +102,20 @@ class DashboardViewSet(viewsets.ViewSet):
         month_start = today.replace(day=1)
         year_start = today.replace(month=1, day=1)
         
+        # Récupérer le filtre de store (optionnel)
+        store_filter = request.query_params.get('store')
+        
         # Get assigned stores if user has any
         assigned_stores = self._get_assigned_stores(user)
+        
+        # Si un store est spécifié, filtrer uniquement sur ce store
+        if store_filter:
+            from apps.inventory.models import Store
+            try:
+                selected_store = Store.objects.get(id=store_filter, is_active=True)
+                assigned_stores = [selected_store]
+            except Store.DoesNotExist:
+                assigned_stores = []
         
         # Get filtered querysets with optimizations
         sales_qs = self._get_sales_queryset(user).only(
@@ -112,6 +124,11 @@ class DashboardViewSet(viewsets.ViewSet):
         expenses_qs = self._get_expenses_queryset(user).only(
             'id', 'status'
         )
+        
+        # Appliquer le filtre de store si spécifié
+        if store_filter and assigned_stores:
+            sales_qs = sales_qs.filter(store__in=assigned_stores)
+            expenses_qs = expenses_qs.filter(store__in=assigned_stores)
         
         # Sales statistics - TOUTES LES VENTES (pas seulement confirmées)
         # Car dans la facturation, on peut avoir des ventes qui génèrent du CA sans être confirmées
@@ -134,14 +151,18 @@ class DashboardViewSet(viewsets.ViewSet):
             count=Count('id')
         )
         
-        # Stock statistics (optimized queries)
+        # Stock statistics (optimized queries) - filtré par store si spécifié
+        stock_queryset = Stock.objects.select_related('product')
+        if store_filter and assigned_stores:
+            stock_queryset = stock_queryset.filter(store__in=assigned_stores)
+        
         stock_stats = {
             'total_products': Product.objects.filter(is_active=True).count(),
-            'low_stock': Stock.objects.select_related('product').filter(
+            'low_stock': stock_queryset.filter(
                 quantity__lt=F('product__minimum_stock')
             ).only('id', 'product_id').distinct().count(),
-            'out_of_stock': Stock.objects.filter(quantity=0).count(),
-            'total_stock_value': Stock.objects.select_related('product').aggregate(
+            'out_of_stock': stock_queryset.filter(quantity=0).count(),
+            'total_stock_value': stock_queryset.aggregate(
                 total=Sum(F('quantity') * F('product__cost_price'))
             )['total'] or 0,
         }
@@ -173,36 +194,32 @@ class DashboardViewSet(viewsets.ViewSet):
                 ).count(),
             }
         
-        # Cash statistics - ALIGNÉ AVEC /encaissements
-        # Calcul du solde de caisse = Encaissements - Sorties
-        # Encaissements = Ventes payées + Paiements factures
-        # Sorties = Dépenses + Paiements fournisseurs + Remboursements emprunts + Mouvements caisse OUT
+        # Cash statistics - Utiliser la même fonction que l'API /cashbox/caisse/solde/
+        from apps.cashbox.utils import get_cashbox_real_balance
         
-        from apps.invoicing.models import InvoicePayment
-        from apps.suppliers.models import SupplierPayment
-        from apps.loans.models import LoanPayment
-        
-        if user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tout
-            invoice_payments = InvoicePayment.objects.aggregate(total=Sum('amount'))['total'] or 0
-            sales_paid = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
-            expenses_total = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
-            supplier_payments = SupplierPayment.objects.aggregate(total=Sum('amount'))['total'] or 0
-            loan_payments = LoanPayment.objects.aggregate(total=Sum('amount'))['total'] or 0
-            cash_out = CashMovement.objects.filter(movement_type='out').aggregate(total=Sum('amount'))['total'] or 0
+        # Si un store est filtré, calculer uniquement pour ce store
+        if store_filter and assigned_stores:
+            cash_balance = sum(
+                get_cashbox_real_balance(store_id=s.id) 
+                for s in assigned_stores
+            )
+        elif user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
+            # Admin voit tout - solde total de tous les stores (ou store filtré)
+            from apps.inventory.models import Store
+            stores_to_calc = assigned_stores if assigned_stores else Store.objects.filter(is_active=True)
+            cash_balance = sum(
+                get_cashbox_real_balance(store_id=s.id) 
+                for s in stores_to_calc
+            )
         else:
-            # Utilisateur normal voit uniquement ses transactions
-            invoice_payments = InvoicePayment.objects.filter(invoice__created_by=user).aggregate(total=Sum('amount'))['total'] or 0
-            sales_paid = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
-            expenses_total = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
-            supplier_payments = SupplierPayment.objects.filter(created_by=user).aggregate(total=Sum('amount'))['total'] or 0
-            loan_payments = LoanPayment.objects.filter(created_by=user).aggregate(total=Sum('amount'))['total'] or 0
-            cash_out = CashMovement.objects.filter(movement_type='out', created_by=user).aggregate(total=Sum('amount'))['total'] or 0
-        
-        # Calculer le solde de caisse
-        total_encaissements = invoice_payments + sales_paid
-        total_sorties = expenses_total + supplier_payments + loan_payments + cash_out
-        cash_balance = total_encaissements - total_sorties
+            # Utilisateur normal voit uniquement ses stores assignés
+            if hasattr(user, 'assigned_stores') and user.assigned_stores.exists():
+                cash_balance = sum(
+                    get_cashbox_real_balance(store_id=s.id) 
+                    for s in user.assigned_stores.all()
+                )
+            else:
+                cash_balance = 0
         
         # Pending items (filtered by user)
         pending = {
@@ -244,6 +261,7 @@ class DashboardViewSet(viewsets.ViewSet):
         """Sales chart data over time (filtered by user)."""
         user = request.user
         period = request.query_params.get('period', 'month')  # week, month, year
+        store_filter = request.query_params.get('store')  # Filtre par store
         
         today = timezone.now().date()
         
@@ -266,6 +284,10 @@ class DashboardViewSet(viewsets.ViewSet):
         
         # Get filtered sales queryset
         sales_qs = self._get_sales_queryset(user)
+        
+        # Appliquer le filtre de store si spécifié
+        if store_filter:
+            sales_qs = sales_qs.filter(store_id=store_filter)
         
         sales_data = sales_qs.filter(
             sale_date__gte=start_date,
@@ -304,7 +326,7 @@ class DashboardViewSet(viewsets.ViewSet):
             total_quantity=Sum('quantity'),
             total_amount=Sum(F('quantity') * F('unit_price')),
             sales_count=Count('sale', distinct=True)
-        ).order_by('total_amount')[:limit]
+        ).order_by('-total_quantity')[:limit]  # Trier par quantité décroissante
         
         # Enrich with real stock data
         result = []
@@ -393,11 +415,21 @@ class DashboardViewSet(viewsets.ViewSet):
     def cash_flow(self, request):
         """Cash flow analysis."""
         days = int(request.query_params.get('days', 30))
+        store_filter = request.query_params.get('store')  # Filtre par store
         start_date = timezone.now().date() - timedelta(days=days)
         
         cash_movements = CashMovement.objects.filter(
             created_at__date__gte=start_date
-        ).annotate(
+        )
+        
+        # Appliquer le filtre de store si spécifié
+        # CashMovement -> cashbox_session -> cashbox -> store
+        if store_filter:
+            cash_movements = cash_movements.filter(
+                cashbox_session__cashbox__store_id=store_filter
+            )
+        
+        cash_movements = cash_movements.annotate(
             date=TruncDate('created_at')
         ).values('date', 'movement_type').annotate(
             total=Sum('amount')
@@ -436,10 +468,16 @@ class DashboardViewSet(viewsets.ViewSet):
         """Financial summary including loans, expenses, etc. (filtered by user)."""
         user = request.user
         month_start = timezone.now().date().replace(day=1)
+        store_filter = request.query_params.get('store')  # Filtre par store
         
         # Get filtered querysets
         expenses_qs = self._get_expenses_queryset(user)
         sales_qs = self._get_sales_queryset(user)
+        
+        # Appliquer le filtre de store si spécifié
+        if store_filter:
+            expenses_qs = expenses_qs.filter(store_id=store_filter)
+            sales_qs = sales_qs.filter(store_id=store_filter)
         
         # Loans - toujours global car pas de système de propriété
         loans_summary = {

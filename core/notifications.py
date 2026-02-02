@@ -80,6 +80,18 @@ def create_notification(
 
 def notify_stock_rupture(user, product_name, product_id):
     """Notifier une rupture de stock"""
+    # Vérifier si une notification non lue existe déjà pour ce produit
+    existing_notification = Notification.objects.filter(
+        user=user,
+        type='stock_rupture',
+        data__product_id=product_id,
+        is_read=False
+    ).first()
+    
+    # Si une notification non lue existe déjà, ne pas en créer une nouvelle
+    if existing_notification:
+        return existing_notification
+    
     return create_notification(
         user=user,
         notification_type='stock_rupture',
@@ -93,6 +105,18 @@ def notify_stock_rupture(user, product_name, product_id):
 
 def notify_stock_low(user, product_name, product_id, current_quantity, reorder_level):
     """Notifier un stock faible"""
+    # Vérifier si une notification non lue existe déjà pour ce produit
+    existing_notification = Notification.objects.filter(
+        user=user,
+        type='stock_low',
+        data__product_id=product_id,
+        is_read=False
+    ).first()
+    
+    # Si une notification non lue existe déjà, ne pas en créer une nouvelle
+    if existing_notification:
+        return existing_notification
+    
     return create_notification(
         user=user,
         notification_type='stock_low',

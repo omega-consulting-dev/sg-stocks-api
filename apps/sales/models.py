@@ -78,11 +78,25 @@ class Sale(AuditModel):
         ('partial', 'Partiellement payé'),
         ('paid', 'Payé'),
     ]
+    PAYMENT_METHOD_CHOICES = [
+        ('cash', 'Espèces'),
+        ('card', 'Carte'),
+        ('transfer', 'Virement'),
+        ('mobile_money', 'Mobile Money (MTN/Orange)'),
+    ]
     payment_status = models.CharField(
         max_length=20,
         choices=PAYMENT_STATUS_CHOICES,
         default='unpaid',
         verbose_name="Statut paiement"
+    )
+    payment_method = models.CharField(
+        max_length=20,
+        choices=PAYMENT_METHOD_CHOICES,
+        default='cash',
+        null=True,
+        blank=True,
+        verbose_name="Mode de paiement"
     )
     paid_amount = models.DecimalField(
         max_digits=12,

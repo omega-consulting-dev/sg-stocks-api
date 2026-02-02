@@ -291,8 +291,8 @@ class SupplierPayment(AuditModel):
     PAYMENT_METHOD_CHOICES = [
         ('cash', 'Espèces'),
         ('bank_transfer', 'Virement bancaire'),
+        ('mobile_money', 'Mobile Money (MTN/Orange)'),
         ('check', 'Chèque'),
-        ('mobile_money', 'Mobile Money'),
     ]
     payment_method = models.CharField(
         max_length=20,

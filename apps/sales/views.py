@@ -40,6 +40,16 @@ class SaleViewSet(viewsets.ModelViewSet):
     ordering_fields = ['sale_date', 'total_amount', 'created_at', 'sale_number']
     ordering = ['sale_number']  # Tri par numéro de vente (VTE2026000001, VTE2026000002, etc.)
     
+    def get_permissions(self):
+        """
+        Permissions personnalisées pour certaines actions.
+        Les statistiques (stats) sont accessibles à tous les utilisateurs authentifiés
+        car le filtrage est déjà géré par get_queryset().
+        """
+        if self.action in ['stats', 'export_statistics_excel', 'export_statistics_pdf']:
+            return [IsAuthenticated()]
+        return super().get_permissions()
+    
     def get_queryset(self):
         """
         Filtrage sécurisé des ventes selon le rôle et access_scope.

@@ -72,9 +72,6 @@ class UserViewSet(viewsets.ModelViewSet):
     Gestion de tous les types d'utilisateurs : collaborateurs, clients, fournisseurs.
     """
     
-    queryset = User.objects.select_related('role').prefetch_related(
-        'secondary_roles', 'assigned_stores'
-    )
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = UserFilter
@@ -85,23 +82,20 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering_fields = ['date_joined', 'username', 'last_name', 'email']
     ordering = ['date_joined']
     
-    def get_serializer_class(self):
-        """Return appropriate serializer based on action."""
-        if self.action == 'list':
-            return UserListSerializer
-        elif self.action == 'create':
-            return UserCreateSerializer
-        elif self.action in ['update', 'partial_update']:
-            return UserUpdateSerializer
-        elif self.action == 'change_password':
-            return ChangePasswordSerializer
-        elif self.action == 'reset_password':
-            return ResetPasswordSerializer
-        return UserDetailSerializer
-    
     def get_queryset(self):
-        """Filter queryset based on user permissions."""
-        queryset = super().get_queryset()
+        """Filter queryset based on user permissions and schema."""
+        from django.db import connection
+        
+        # Queryset de base
+        queryset = User.objects.select_related('role')
+        
+        # Ajouter prefetch_related uniquement si on est dans un schéma tenant
+        # (pas dans public, car les tables inventory n'existent pas dans public)
+        if connection.schema_name != 'public':
+            queryset = queryset.prefetch_related('secondary_roles', 'assigned_stores')
+        else:
+            queryset = queryset.prefetch_related('secondary_roles')
+        
         user = self.request.user
         
         # Super admin voit tout
@@ -121,6 +115,23 @@ class UserViewSet(viewsets.ModelViewSet):
         # ).distinct()
         return queryset
     
+    def get_serializer_class(self):
+        """Return appropriate serializer based on action."""
+        if self.action == 'list':
+            return UserListSerializer
+        elif self.action == 'create':
+            return UserCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return UserUpdateSerializer
+        elif self.action == 'change_password':
+            return ChangePasswordSerializer
+        elif self.action == 'reset_password':
+            return ResetPasswordSerializer
+        return UserDetailSerializer
+    
+    def destroy(self, request, *args, **kwargs):
+        return queryset
+    
     def destroy(self, request, *args, **kwargs):
         """Soft delete: mark as inactive instead of deleting."""
         instance = self.get_object()
@@ -128,6 +139,31 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active_employee = False
         instance.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    def perform_create(self, serializer):
+        """Valider la limite d'utilisateurs avant la création."""
+        from apps.tenants.models import Company
+        from django.db import connection
+        
+        schema_name = connection.schema_name
+        if schema_name != 'public':
+            try:
+                company = Company.objects.using('default').get(schema_name=schema_name)
+                
+                # Vérifier si on peut ajouter un utilisateur
+                if not company.can_add_user():
+                    from rest_framework.exceptions import ValidationError
+                    max_u = company.max_users
+                    current_count = User.objects.count()
+                    next_plan = "Business" if company.plan == "starter" else "Enterprise"
+                    
+                    raise ValidationError({
+                        'detail': f"Limite d'utilisateurs atteinte ({current_count}/{max_u}). Passez au plan {next_plan} pour ajouter plus d'utilisateurs."
+                    })
+            except Company.DoesNotExist:
+                pass
+        
+        serializer.save()
     
     @extend_schema(
         summary="Profil de l'utilisateur connecté",

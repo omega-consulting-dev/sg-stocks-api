@@ -7,6 +7,7 @@ from apps.main.views_superadmin import SuperAdminLoginView
 from apps.main.views_settings import CompanySettingsViewSet, get_languages, set_language
 from apps.main.views_users import PublicUserViewSet
 from apps.main.views_contact import ContactMessageViewSet
+from apps.main.views_registration import check_email, register_tenant
 from core.views import NotificationViewSet
 
 router = DefaultRouter()
@@ -20,6 +21,10 @@ urlpatterns = [
     path('login/', SuperAdminLoginView.as_view(), name='superadmin_login'),
     path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('verify/', TokenVerifyView.as_view(), name='token_verify'),
+    
+    # Public registration endpoints
+    path('check-email/', check_email, name='check-email'),
+    path('register-tenant/', register_tenant, name='register-tenant'),
     
     # Language management endpoints
     path('languages/', get_languages, name='get-languages'),

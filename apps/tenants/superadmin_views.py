@@ -260,19 +260,19 @@ class SuperAdminBillingViewSet(viewsets.ModelViewSet):
         monthly_revenue = CompanyBilling.objects.filter(
             status='paid',
             payment_date__gte=current_month_start
-        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         
         # Revenus cette année
         current_year_start = timezone.now().date().replace(month=1, day=1)
         yearly_revenue = CompanyBilling.objects.filter(
             status='paid',
             payment_date__gte=current_year_start
-        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         
         # Factures en attente
         pending_amount = CompanyBilling.objects.filter(
             status='pending'
-        ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
         
         return Response({
             'monthly_revenue': monthly_revenue,
@@ -308,8 +308,8 @@ class SuperAdminBillingViewSet(viewsets.ModelViewSet):
             
             # Calculer le montant selon le plan actuel
             amount = company.get_plan_price()
-            tax_amount = amount * Decimal('0.1925')  # TVA 19.25%
-            total_amount = amount + tax_amount
+            tax_amount = Decimal('0')  # Pas de TVA
+            total_amount = amount  # Total = Montant HT
             
             if existing_invoice:
                 # Si la facture existe et est PENDING, on met à jour avec le nouveau prix
@@ -317,8 +317,8 @@ class SuperAdminBillingViewSet(viewsets.ModelViewSet):
                     # Vérifier si le prix a changé
                     if existing_invoice.amount != amount:
                         existing_invoice.amount = amount
-                        existing_invoice.tax_amount = tax_amount
-                        existing_invoice.total_amount = total_amount
+                        existing_invoice.tax_amount = Decimal('0')
+                        existing_invoice.total_amount = amount
                         existing_invoice.notes = f'Facturation mensuelle - Plan {company.plan} (mise à jour)'
                         existing_invoice.save()
                         updated_count += 1
@@ -479,12 +479,12 @@ class SuperAdminDashboardViewSet(viewsets.ViewSet):
             monthly_revenue = CompanyBilling.objects.filter(
                 status='paid',
                 payment_date__gte=current_month_start
-            ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
             
             yearly_revenue = CompanyBilling.objects.filter(
                 status='paid',
                 payment_date__gte=current_year_start
-            ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
             
             # Calcul du nombre total d'utilisateurs
             try:
@@ -555,7 +555,7 @@ class SuperAdminDashboardViewSet(viewsets.ViewSet):
             monthly_revenue = CompanyBilling.objects.filter(
                 status='paid',
                 payment_date__gte=current_month_start
-            ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
             
             # Support tickets actifs (avec gestion d'erreur)
             try:

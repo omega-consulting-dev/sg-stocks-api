@@ -1,6 +1,30 @@
 from rest_framework import serializers
 from django.db import models
+from django.utils import timezone
 from apps.suppliers.models import Supplier, SupplierPayment, PurchaseOrder
+
+
+def generate_unique_payment_number():
+    """
+    Génère un numéro de paiement unique en utilisant un timestamp avec microsecondes
+    et en ajoutant un compteur si nécessaire pour éviter les collisions.
+    """
+    base_number = f"PAY{timezone.now().strftime('%Y%m%d%H%M%S%f')}"
+    payment_number = base_number
+    counter = 1
+    
+    # Vérifier l'unicité et ajouter un compteur si nécessaire
+    while SupplierPayment.objects.filter(payment_number=payment_number).exists():
+        payment_number = f"{base_number}-{counter}"
+        counter += 1
+        # Sécurité : limiter à 100 tentatives
+        if counter > 100:
+            # Fallback: utiliser un UUID partiel
+            import uuid
+            payment_number = f"{base_number}-{str(uuid.uuid4())[:8]}"
+            break
+    
+    return payment_number
 
 
 class SupplierListSerializer(serializers.ModelSerializer):
@@ -147,7 +171,7 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
         from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
         from django.db.models import Sum
 
-        validated_data['payment_number'] = f"PAY{timezone.now().strftime('%Y%m%d%H%M%S')}"
+        validated_data['payment_number'] = generate_unique_payment_number()
         
         supplier = validated_data.get('supplier')
         amount = Decimal(str(validated_data.get('amount', 0)))
@@ -303,7 +327,7 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
                         # Créer un paiement additionnel pour ce PO
                         # Note: paid_amount sera mis à jour automatiquement par le signal
                         additional_payment = SupplierPayment.objects.create(
-                            payment_number=f"PAY{timezone.now().strftime('%Y%m%d%H%M%S%f')}",
+                            payment_number=generate_unique_payment_number(),
                             supplier=supplier,
                             purchase_order=other_po,
                             payment_date=validated_data['payment_date'],
@@ -346,7 +370,7 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
                         # Autres POs : créer des paiements additionnels
                         # Note: paid_amount sera mis à jour automatiquement par le signal
                         additional_payment = SupplierPayment.objects.create(
-                            payment_number=f"PAY{timezone.now().strftime('%Y%m%d%H%M%S%f')}",
+                            payment_number=generate_unique_payment_number(),
                             supplier=supplier,
                             purchase_order=po_debt,
                             payment_date=validated_data['payment_date'],

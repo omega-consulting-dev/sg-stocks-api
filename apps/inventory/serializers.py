@@ -8,6 +8,7 @@ from apps.inventory.models import (
     Inventory, InventoryLine
 )
 from apps.suppliers.models import Supplier, PurchaseOrder, PurchaseOrderLine, SupplierPayment
+from apps.suppliers.serializers import generate_unique_payment_number
 from django.utils import timezone
 from django.db import transaction
 from decimal import Decimal
@@ -400,7 +401,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
                         pay_amt = Decimal('0')
 
                     SupplierPayment.objects.create(
-                        payment_number=f"PAY{timezone.now().strftime('%Y%m%d%H%M%S')}",
+                        payment_number=generate_unique_payment_number(),
                         supplier=po.supplier,
                         purchase_order=po,
                         payment_date=payment_date or timezone.now().date(),
