@@ -1,0 +1,28 @@
+# Dockerfile pour Celery Worker
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements/common.txt requirements/common.txt
+COPY requirements/production.txt requirements/production.txt
+
+RUN pip install --upgrade pip && \
+    pip install -r requirements/production.txt && \
+    pip install psycopg2-binary celery redis
+
+COPY . .
+
+# Script d'entrée pour Celery
+COPY docker-entrypoint-celery.sh /docker-entrypoint-celery.sh
+RUN chmod +x /docker-entrypoint-celery.sh
+
+ENTRYPOINT ["/docker-entrypoint-celery.sh"]

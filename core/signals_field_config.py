@@ -38,11 +38,11 @@ def initialize_field_configurations_for_new_tenant(sender, instance, created, **
                         """, [instance.schema_name])
                         table_exists = cursor.fetchone()[0]
                 except Exception as check_error:
-                    logger.warning(f"⚠️ Could not check if table exists for {instance.schema_name}: {str(check_error)}")
+                    logger.warning(f" Could not check if table exists for {instance.schema_name}: {str(check_error)}")
                     return
                 
                 if not table_exists:
-                    logger.info(f"⏳ Table core_fieldconfiguration does not exist yet for tenant {instance.schema_name}. Skipping initialization (will be done after migrations).")
+                    logger.info(f" Table core_fieldconfiguration does not exist yet for tenant {instance.schema_name}. Skipping initialization (will be done after migrations).")
                     return
                 
                 # Check if configurations already exist
@@ -57,7 +57,7 @@ def initialize_field_configurations_for_new_tenant(sender, instance, created, **
                         config = FieldConfiguration.objects.create(**config_data)
                         created_configs.append(config)
                     
-                    logger.info(f"✅ Created {len(created_configs)} field configurations for tenant {instance.schema_name}")
+                    logger.info(f" Created {len(created_configs)} field configurations for tenant {instance.schema_name}")
                 else:
                     # Configurations exist, check if all expected forms are present
                     default_configs = get_default_field_configurations()
@@ -79,9 +79,9 @@ def initialize_field_configurations_for_new_tenant(sender, instance, created, **
                                 )
                                 added_count += 1
                         
-                        logger.info(f"✅ Added {added_count} missing field configurations for tenant {instance.schema_name}")
+                        logger.info(f" Added {added_count} missing field configurations for tenant {instance.schema_name}")
                     else:
-                        logger.info(f"ℹ️ All field configurations already exist for tenant {instance.schema_name}")
+                        logger.info(f"ℹ All field configurations already exist for tenant {instance.schema_name}")
                         
         except Exception as e:
-            logger.error(f"❌ Error initializing field configurations for tenant {instance.schema_name}: {str(e)}")
+            logger.error(f" Error initializing field configurations for tenant {instance.schema_name}: {str(e)}")
