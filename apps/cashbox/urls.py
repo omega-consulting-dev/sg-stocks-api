@@ -16,12 +16,12 @@ from apps.cashbox.views import (
     BankDepositCreateView,
     BankTransactionsExportPDFView,
     BankTransactionsExportExcelView,
-    MobileMoneyBalanceView,
-    MobileMoneyTransactionsListView,
-    MobileMoneyDepositCreateView,
-    MobileMoneyWithdrawalCreateView,
-    MobileMoneyTransactionsExportPDFView,
-    MobileMoneyTransactionsExportExcelView,
+    # MobileMoneyBalanceView,
+    # MobileMoneyTransactionsListView,
+    # MobileMoneyDepositCreateView,
+    # MobileMoneyWithdrawalCreateView,
+    # MobileMoneyTransactionsExportPDFView,
+    # MobileMoneyTransactionsExportExcelView,
 )
 
 router = DefaultRouter()
@@ -42,11 +42,12 @@ urlpatterns = [
     path('bank-transactions/deposit/', BankDepositCreateView.as_view(), name='bank-deposit-create'),
     path('bank-transactions/export-pdf/', BankTransactionsExportPDFView.as_view(), name='bank-transactions-export-pdf'),
     path('bank-transactions/export-excel/', BankTransactionsExportExcelView.as_view(), name='bank-transactions-export-excel'),
-    path('mobile-money/balance/', MobileMoneyBalanceView.as_view(), name='mobile-money-balance'),
-    path('mobile-money/transactions/', MobileMoneyTransactionsListView.as_view(), name='mobile-money-transactions'),
-    path('mobile-money/deposit/', MobileMoneyDepositCreateView.as_view(), name='mobile-money-deposit'),
-    path('mobile-money/withdraw/', MobileMoneyWithdrawalCreateView.as_view(), name='mobile-money-withdraw'),
-    path('mobile-money/export-pdf/', MobileMoneyTransactionsExportPDFView.as_view(), name='mobile-money-export-pdf'),
-    path('mobile-money/export-excel/', MobileMoneyTransactionsExportExcelView.as_view(), name='mobile-money-export-excel'),
+    # TODO: Implement MobileMoney views
+    # path('mobile-money/balance/', MobileMoneyBalanceView.as_view(), name='mobile-money-balance'),
+    # path('mobile-money/transactions/', MobileMoneyTransactionsListView.as_view(), name='mobile-money-transactions'),
+    # path('mobile-money/deposit/', MobileMoneyDepositCreateView.as_view(), name='mobile-money-deposit'),
+    # path('mobile-money/withdraw/', MobileMoneyWithdrawalCreateView.as_view(), name='mobile-money-withdraw'),
+    # path('mobile-money/export-pdf/', MobileMoneyTransactionsExportPDFView.as_view(), name='mobile-money-export-pdf'),
+    # path('mobile-money/export-excel/', MobileMoneyTransactionsExportExcelView.as_view(), name='mobile-money-export-excel'),
     path('', include(router.urls)),
 ]
