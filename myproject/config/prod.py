@@ -8,9 +8,10 @@ SECURE_SSL_REDIRECT = False
 CORS_ALLOW_ALL_ORIGINS = False
 
 # Ajouter le support des sous-domaines dynamiques pour les tenants
-# Format: https://tenant1.sgstocks.com, https://tenant2.sgstocks.com, etc.
+# Format: https://omega.app.sg-stocks.com, https://api.sg-stocks.com, etc.
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https?://[\w-]+\.sg-stocks\.com$",  # Sous-domaines (HTTP et HTTPS)
+    r"^https?://(?:[\w-]+\.)*[\w-]+\.sg-stocks\.com$",  # Multi-niveau sous-domaines (omega.app.sg-stocks.com)
+    r"^https?://[\w-]+\.sg-stocks\.com$",  # Sous-domaines simples (api.sg-stocks.com)
     r"^https?://sg-stocks\.com$",          # Domaine principal
 ]
 
