@@ -1,7 +1,8 @@
 from .base import *
 
 DEBUG = False
-SECURE_SSL_REDIRECT = True
+# TODO: Enable after SSL configuration
+SECURE_SSL_REDIRECT = False
 
 # CORS Configuration pour la production
 CORS_ALLOW_ALL_ORIGINS = False
@@ -9,12 +10,14 @@ CORS_ALLOW_ALL_ORIGINS = False
 # Ajouter le support des sous-domaines dynamiques pour les tenants
 # Format: https://tenant1.sgstocks.com, https://tenant2.sgstocks.com, etc.
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://[\w-]+\.sgstocks\.com$",  # Sous-domaines des tenants
+    r"^https?://[\w-]+\.sg-stocks\.com$",  # Sous-domaines (HTTP et HTTPS)
+    r"^https?://sg-stocks\.com$",          # Domaine principal
 ]
 
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+# TODO: Enable after SSL configuration
+SECURE_SSL_REDIRECT = False
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
