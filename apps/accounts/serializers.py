@@ -23,8 +23,14 @@ class LoginSerializer(TokenObtainPairSerializer):
         if email and password:
             # Optimisation: select_related pour charger le rôle en une seule requête
             from apps.accounts.models import User
+            from django.db import connection
+            
             try:
-                user_with_role = User.objects.select_related('role').prefetch_related('assigned_stores').get(email=email, is_active=True)
+                # Ne charger assigned_stores que si on n'est pas dans le schéma public
+                if connection.schema_name != 'public':
+                    user_with_role = User.objects.select_related('role').prefetch_related('assigned_stores').get(email=email, is_active=True)
+                else:
+                    user_with_role = User.objects.select_related('role').get(email=email, is_active=True)
             except User.DoesNotExist:
                 raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
             
@@ -37,8 +43,6 @@ class LoginSerializer(TokenObtainPairSerializer):
             user = user_with_role
             
             # Vérifier si l'entreprise est suspendue
-            from django.db import connection
-            
             try:
                 tenant = connection.tenant
                 
