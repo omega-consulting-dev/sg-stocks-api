@@ -1,5 +1,6 @@
 from django.contrib.auth.backends import ModelBackend
 from django_tenants.utils import get_tenant, get_public_schema_name
+from django.db import connection
 
 class TenantAuthBackend(ModelBackend):
     """
@@ -13,7 +14,11 @@ class TenantAuthBackend(ModelBackend):
         if not login_id or not password:
             return None
 
-        if get_tenant(request=request).schema_name == get_public_schema_name():
+        # Utiliser connection.schema_name au lieu de get_tenant() qui peut retourner None
+        tenant = get_tenant(request=request) if request else None
+        schema_name = tenant.schema_name if tenant else connection.schema_name
+        
+        if schema_name == get_public_schema_name():
             from apps.main.models import User as MainUser
             try:
                 user = MainUser.objects.get(email=login_id)
