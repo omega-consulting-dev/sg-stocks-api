@@ -267,22 +267,15 @@ class TenantProvisioningSerializer(serializers.Serializer):
             'last_name': validated_data.get("admin_last_name", ''),
         }
 
-        # Lancer le provisioning en arrière-plan si Celery est disponible
+        # Provisioning SYNCHRONE (Celery ne fonctionne pas pour l'instant)
+        # TODO: Réactiver Celery une fois le worker opérationnel
         try:
-            # Tenter d'utiliser Celery (asynchrone)
-            provision_tenant_async.delay(company.id, admin_data)
-            provisioning_status = "pending"
-            logger.info(f"[OK] Provisioning lancé en arrière-plan via Celery pour {company.name}")
-        except Exception as e:
-            # Si Celery/Redis n'est pas disponible, exécuter de manière synchrone
-            logger.warning(f"[ATTENTION] Celery non disponible ({e}), provisioning synchrone...")
-            try:
-                provision_tenant_async(company.id, admin_data)
-                provisioning_status = "completed"
-                logger.info(f"[OK] Provisioning synchrone terminé pour {company.name}")
-            except Exception as sync_error:
-                logger.error(f"[ERREUR] Erreur lors du provisioning synchrone: {sync_error}")
-                provisioning_status = "failed"
+            provision_tenant_async(company.id, admin_data)
+            provisioning_status = "completed"
+            logger.info(f"[OK] Provisioning synchrone terminé pour {company.name}")
+        except Exception as sync_error:
+            logger.error(f"[ERREUR] Erreur lors du provisioning: {sync_error}")
+            provisioning_status = "failed"
 
         return {
             "company": company,
