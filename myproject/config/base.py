@@ -16,7 +16,11 @@ ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 CORS_ALLOW_ALL_ORIGINS = False  # Never use wildcard with credentials
 CORS_ALLOWED_ORIGINS = []  # Will be set in dev.py/prod.py
 CORS_ALLOWED_ORIGIN_REGEXES = []  # Will be set in dev.py/prod.py
-CORS_ALLOW_HEADERS = list(default_headers) + env.list('CORS_ALLOW_HEADERS', default=[])
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-tenant',
+    'x-tenant-schema',
+    'x-tenant-name',
+] + env.list('CORS_ALLOW_HEADERS', default=[])
 CORS_ALLOW_CREDENTIALS = True
 
 TENANT_BASE_DOMAIN = env('BASE_DOMAIN', default='localhost') # variable customiser pour faciliter la creation des domaines(tenant1 au lieux de tenant1.mydomain.com)
