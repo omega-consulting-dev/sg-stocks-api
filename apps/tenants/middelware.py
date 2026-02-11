@@ -1,5 +1,8 @@
 from django_tenants.middleware.main import TenantMainMiddleware
 from django_tenants.utils import remove_www
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TenantHeaderMiddleware(TenantMainMiddleware):
@@ -9,16 +12,22 @@ class TenantHeaderMiddleware(TenantMainMiddleware):
     @staticmethod
     def hostname_from_request(request):
         # Récupère le hostname depuis la requête
-        host = remove_www(request.get_host().split(':')[0].lower())
+        raw_host = request.get_host()
+        host = remove_www(raw_host.split(':')[0].lower())
+        
+        # DEBUG: Logger pour voir ce qui est extrait
+        logger.warning(f"[TENANT DEBUG] Raw host: {raw_host}, Processed host: {host}")
         
         # Si un header X-Tenant ou X-Tenant-Schema est fourni, l'utiliser pour construire le host
         tenant_header = request.META.get('HTTP_X_TENANT_SCHEMA') or request.META.get('HTTP_X_TENANT')
         
         if tenant_header:
+            logger.warning(f"[TENANT DEBUG] Found tenant header: {tenant_header}")
             # En dev local (localhost), construire {tenant}.localhost
             if 'localhost' in host or '127.0.0.1' in host:
                 host = f"{tenant_header}.localhost"
             # Sinon retourner le host tel quel (le header sert juste à forcer le schéma)
         
         # Retourner le hostname complet pour la recherche dans la base de données
+        logger.warning(f"[TENANT DEBUG] Final hostname: {host}")
         return host
