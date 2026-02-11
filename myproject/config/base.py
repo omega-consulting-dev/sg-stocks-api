@@ -232,7 +232,6 @@ INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in S
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
-    'django_tenants.middleware.main.TenantMainMiddleware',
     'apps.tenants.middelware.TenantHeaderMiddleware',
 
     'django.contrib.sessions.middleware.SessionMiddleware',
