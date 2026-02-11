@@ -237,14 +237,21 @@ class TenantProvisioningSerializer(serializers.Serializer):
         company = Company.objects.create(**company_data)
 
         # Domaines associés
-        # 1. Domaine principal pour la production
-        domain_prod = Domain.objects.create(
-            domain=f"{subdomain}.{base_domain}",
+        # 1. Domaine frontend web (app)
+        domain_app = Domain.objects.create(
+            domain=f"{subdomain}.app.sg-stocks.com",
             tenant=company,
-            is_primary=False  # Production n'est pas primary en local
+            is_primary=False
         )
         
-        # 2. Domaine localhost pour le développement local
+        # 2. Domaine API
+        domain_api = Domain.objects.create(
+            domain=f"{subdomain}.api.sg-stocks.com",
+            tenant=company,
+            is_primary=False
+        )
+        
+        # 3. Domaine localhost pour le développement local
         domain_local = Domain.objects.create(
             domain=f"{subdomain}.localhost",
             tenant=company,
