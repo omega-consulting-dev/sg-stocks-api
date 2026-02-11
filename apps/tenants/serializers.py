@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.core.management import call_command
 from django.utils import timezone
+from decimal import Decimal
 from .models import Company, Domain, CompanyBilling, AuditLog, SupportTicket, SystemMetrics
 from apps.accounts.models import User, Role
 import logging
