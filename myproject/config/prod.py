@@ -26,4 +26,4 @@ SECURE_HSTS_PRELOAD = True
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 # Logging
-LOGGING['handlers']['file']['filename'] = '/var/log/sgstock/django.log'
+LOGGING['handlers']['file']['filename'] = '/app/logs/django.log'
