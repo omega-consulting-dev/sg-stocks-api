@@ -30,20 +30,22 @@ DATABASE_ROUTERS = ['django_tenants.routers.TenantSyncRouter']
 DATABASES = {
     "default": {
         "ENGINE": "django_tenants.postgresql_backend",
-        "NAME": env("POSTGRES_DB", default="app"),
-        "USER": env("POSTGRES_USER", default="app"),
-        "PASSWORD": env("POSTGRES_PASSWORD", default=""),
-        "HOST": env("POSTGRES_HOST", default="localhost"),
-        "PORT": env("POSTGRES_PORT", default="5432"),
+        "NAME": env("DB_NAME", default="app"),
+        "USER": env("DB_USER", default="app"),
+        "PASSWORD": env("DB_PASSWORD", default=""),
+        "HOST": env("DB_HOST", default="localhost"),
+        "PORT": env("DB_PORT", default="5432"),
     }
 }
 
 
 # Redis
+REDIS_HOST = env('REDIS_HOST', default='localhost')
+REDIS_PORT = env('REDIS_PORT', default='6379')
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": env('REDIS_URL', default='redis://localhost:6379/0'),
+        "LOCATION": f'redis://{REDIS_HOST}:{REDIS_PORT}/0',
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         }
