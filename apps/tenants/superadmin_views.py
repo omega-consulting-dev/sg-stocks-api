@@ -99,6 +99,7 @@ class SuperAdminCompanyViewSet(viewsets.ModelViewSet):
         reason = request.data.get('reason', 'No reason provided')
         
         company.is_suspended = True
+        company.is_active = False
         company.suspension_reason = reason
         company.save()
         
@@ -124,6 +125,7 @@ class SuperAdminCompanyViewSet(viewsets.ModelViewSet):
         company = self.get_object()
         
         company.is_suspended = False
+        company.is_active = True
         company.suspension_reason = None
         company.save()
         
