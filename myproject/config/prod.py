@@ -1,8 +1,11 @@
 from .base import *
 
 DEBUG = False
-# TODO: Enable after SSL configuration
-SECURE_SSL_REDIRECT = False
+
+# SSL/HTTPS Configuration
+SECURE_SSL_REDIRECT = True  # Forcer HTTPS
+SESSION_COOKIE_SECURE = True  # Cookies sécurisés (HTTPS uniquement)
+CSRF_COOKIE_SECURE = True  # CSRF cookies sécurisés
 
 # CORS Configuration pour la production
 CORS_ALLOW_ALL_ORIGINS = False
@@ -14,10 +17,6 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https?://[\w-]+\.sg-stocks\.com$",  # Sous-domaines simples (api.sg-stocks.com)
     r"^https?://sg-stocks\.com$",          # Domaine principal
 ]
-
-# TODO: Enable after SSL configuration
-SECURE_SSL_REDIRECT = False
-SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
