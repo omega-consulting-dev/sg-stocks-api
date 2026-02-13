@@ -16,6 +16,7 @@ from decimal import Decimal
 from datetime import date, timedelta
 import re
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +447,8 @@ def register_tenant(request):
         }, status=status.HTTP_201_CREATED)
         
     except Exception as e:
+        logger.error(f"Erreur lors de l'inscription: {str(e)}")
+        logger.error(traceback.format_exc())
         return Response({
             'error': f'Erreur lors de l\'inscription: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
