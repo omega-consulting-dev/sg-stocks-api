@@ -22,6 +22,8 @@ class TenantHeaderMiddleware(TenantMainMiddleware):
             # En dev local (localhost), construire {tenant}.localhost
             if 'localhost' in host or '127.0.0.1' in host:
                 host = f"{tenant_header}.localhost"
-            # Sinon retourner le host tel quel (le header sert juste à forcer le schéma)
+            # En production, construire {tenant}.sg-stocks.com
+            elif 'sg-stocks.com' in host:
+                host = f"{tenant_header}.sg-stocks.com"
         
         return host
