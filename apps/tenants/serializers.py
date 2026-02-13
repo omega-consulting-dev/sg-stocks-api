@@ -4,6 +4,7 @@ from django.core.management import call_command
 from django.utils import timezone
 from decimal import Decimal
 from .models import Company, Domain, CompanyBilling, AuditLog, SupportTicket, SystemMetrics
+from .cloudflare_service import CloudflareService
 from apps.accounts.models import User, Role
 import logging
 
@@ -244,7 +245,15 @@ class TenantProvisioningSerializer(serializers.Serializer):
             is_primary=True  # Domaine principal du tenant
         )
         
-        # 2. Domaine localhost pour le développement local
+        # 2. Créer automatiquement l'enregistrement DNS dans Cloudflare
+        cloudflare = CloudflareService()
+        dns_result = cloudflare.create_dns_record(subdomain, proxied=True)
+        if dns_result:
+            logger.info(f"✅ DNS Cloudflare créé automatiquement pour {subdomain}.sg-stocks.com")
+        else:
+            logger.warning(f"⚠️ DNS Cloudflare non créé pour {subdomain}.sg-stocks.com (vérifier la config)")
+        
+        # 3. Domaine localhost pour le développement local
         domain_local = Domain.objects.create(
             domain=f"{subdomain}.localhost",
             tenant=company,
