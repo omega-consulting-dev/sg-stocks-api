@@ -11,9 +11,13 @@ from apps.main.models import User as PublicUser
 from apps.tenants.models import Company, Domain
 from apps.accounts.models import User as TenantUser, Role
 from apps.main.tasks import send_registration_confirmation_email
+from apps.tenants.cloudflare_service import CloudflareService
 from decimal import Decimal
 from datetime import date, timedelta
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(['POST'])
@@ -295,16 +299,21 @@ def register_tenant(request):
         
         # 2. Créer le domaine
         # Production :
-        # domain_name = f"{subdomain}.sgstocks.com"
-        
-        # Local (décommenter pour les tests locaux) :
-        domain_name = f"{subdomain}.localhost"
+        domain_name = f"{subdomain}.sg-stocks.com"
         
         Domain.objects.create(
             domain=domain_name,
             tenant=tenant,
             is_primary=True
         )
+        
+        # Créer l'enregistrement DNS Cloudflare automatiquement
+        try:
+            cloudflare = CloudflareService()
+            cloudflare.create_dns_record(subdomain, proxied=True)
+            logger.info(f"✅ DNS Cloudflare créé automatiquement pour {domain_name}")
+        except Exception as e:
+            logger.warning(f"⚠️ DNS Cloudflare non créé pour {domain_name}: {str(e)}")
         
         # 3. Créer l'utilisateur principal dans le schéma public
         user = PublicUser.objects.create_user(
@@ -374,10 +383,7 @@ def register_tenant(request):
         
         # 6. Construire l'URL d'accès à l'application
         # Production :
-        # access_url = f"http://{subdomain}.sgstocks.com"
-        
-        # Local (décommenter pour les tests locaux) :
-        access_url = f"http://{subdomain}.localhost:5173"
+        access_url = f"https://{subdomain}.sg-stocks.com"
         
         # 7. Envoyer email de confirmation en arrière-plan avec Celery
         try:
