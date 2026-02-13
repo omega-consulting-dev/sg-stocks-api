@@ -249,9 +249,9 @@ class TenantProvisioningSerializer(serializers.Serializer):
         cloudflare = CloudflareService()
         dns_result = cloudflare.create_dns_record(subdomain, proxied=True)
         if dns_result:
-            logger.info(f"✅ DNS Cloudflare créé automatiquement pour {subdomain}.sg-stocks.com")
+            logger.info(f" DNS Cloudflare créé automatiquement pour {subdomain}.sg-stocks.com")
         else:
-            logger.warning(f"⚠️ DNS Cloudflare non créé pour {subdomain}.sg-stocks.com (vérifier la config)")
+            logger.warning(f" DNS Cloudflare non créé pour {subdomain}.sg-stocks.com (vérifier la config)")
         
         # 3. Domaine localhost pour le développement local
         domain_local = Domain.objects.create(

@@ -73,15 +73,16 @@ CELERY_TIMEZONE = 'Africa/Douala'
 CELERY_TASK_ALWAYS_EAGER = False  # Mode synchrone forcé
 CELERY_TASK_EAGER_PROPAGATES = True
 
-# Email - CONFIGURATION EN DUR POUR FORCER SMTP
+# Email - CONFIGURATION ZOHO MAIL PROFESSIONNELLE
+# ⚠️ Lors de la création du compte Zoho Mail, utilisez ce mot de passe : noreply@sgstock2025
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'ralphsengue@gmail.com'
-EMAIL_HOST_PASSWORD = 'dyzymwfevkulqnid'
+EMAIL_HOST = 'smtp.zoho.com'
+EMAIL_PORT = 465
+EMAIL_USE_SSL = True  # SSL pour port 465 (changé de TLS)
+EMAIL_HOST_USER = 'noreply@sg-stocks.com'
+EMAIL_HOST_PASSWORD = 'noreply@sgstock2025'  # Mot de passe à utiliser lors de la création Zoho
 
-DEFAULT_FROM_EMAIL = 'ralphsengue@gmail.com'
+DEFAULT_FROM_EMAIL = 'SG-Stocks <noreply@sg-stocks.com>'
 
 # Cloudflare DNS Automation
 CLOUDFLARE_API_TOKEN = env('CLOUDFLARE_API_TOKEN', default=None)
