@@ -14,7 +14,7 @@ class TenantAuthBackend(ModelBackend):
         if not login_id or not password:
             return None
 
-        # Utiliser connection.schema_name au lieu de get_tenant() qui peut retourner None
+        # Gérer le cas où get_tenant retourne None
         tenant = get_tenant(request=request) if request else None
         schema_name = tenant.schema_name if tenant else connection.schema_name
         
