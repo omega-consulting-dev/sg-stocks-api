@@ -278,8 +278,7 @@ class TenantProvisioningSerializer(serializers.Serializer):
 
         return {
             "company": company,
-            "domain_app": domain_app,
-            "domain_api": domain_api,
+            "domain_main": domain_main,
             "domain_local": domain_local,
             "provisioning_status": provisioning_status
         }
