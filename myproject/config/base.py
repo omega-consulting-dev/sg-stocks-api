@@ -83,6 +83,11 @@ EMAIL_HOST_PASSWORD = 'dyzymwfevkulqnid'
 
 DEFAULT_FROM_EMAIL = 'ralphsengue@gmail.com'
 
+# Cloudflare DNS Automation
+CLOUDFLARE_API_TOKEN = env('CLOUDFLARE_API_TOKEN', default=None)
+CLOUDFLARE_ZONE_ID = env('CLOUDFLARE_ZONE_ID', default=None)
+SERVER_IP = env('SERVER_IP', default=None)
+
 # Emails pour les notifications admin (messages de contact)
 ADMIN_NOTIFICATION_EMAILS = env.list('ADMIN_NOTIFICATION_EMAILS', default=['admin@localhost'])
 
