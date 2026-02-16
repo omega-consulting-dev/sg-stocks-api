@@ -6,6 +6,8 @@
 .vscode
 .venv
 .env
+.env.production
+.env.local
 
 commit.txt
 *.pyc
