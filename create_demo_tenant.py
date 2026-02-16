@@ -53,7 +53,7 @@ def create_demo_tenant():
         
         # Limites généreuses pour la démo
         max_users=10,
-        max_stores=3,
+        max_stores=2,
         max_products=999999,
         max_storage_mb=5000,
         
@@ -76,7 +76,7 @@ def create_demo_tenant():
     print()
     
     # Créer les domaines
-    print("🌐 Création des domaines...")
+    print(" Création des domaines...")
     
     # Domaine localhost
     Domain.objects.create(
@@ -86,13 +86,26 @@ def create_demo_tenant():
     )
     print("   [OK] demo.localhost")
     
-    # Domaine production (à adapter selon votre domaine)
-    # Domain.objects.create(
-    #     domain='demo.sgstock.cm',
-    #     tenant=demo,
-    #     is_primary=False
-    # )
-    # print("   [OK] demo.sgstock.cm")
+    # Domaine production
+    Domain.objects.create(
+        domain='demo.sg-stocks.com',
+        tenant=demo,
+        is_primary=False
+    )
+    print("   [OK] demo.sg-stocks.com")
+    
+    # Créer le DNS Cloudflare automatiquement
+    print("\n☁️  Création du DNS Cloudflare...")
+    try:
+        from apps.tenants.cloudflare_service import CloudflareService
+        cloudflare = CloudflareService()
+        result = cloudflare.create_dns_record('demo', proxied=True)
+        if result:
+            print("   [OK] DNS demo.sg-stocks.com créé dans Cloudflare")
+        else:
+            print("   [ATTENTION] Échec de création DNS Cloudflare - créez-le manuellement")
+    except Exception as e:
+        print(f"   [ATTENTION] Erreur DNS Cloudflare: {e}")
     
     print()
     
@@ -150,18 +163,34 @@ def create_demo_tenant():
     
     print()
     print("="*80)
-    print("[OK] TENANT DE DÉMO CRÉÉ AVEC SUCCÈS!")
+    print("✅ TENANT DE DÉMO CRÉÉ AVEC SUCCÈS!")
     print("="*80)
     print()
     print("📋 INFORMATIONS DE CONNEXION:")
-    print(f"   URL      : http://demo.localhost:5173")
-    print(f"   Email    : demo@sgstock.cm")
-    print(f"   Password : demo1234")
+    print(f"   URL Local      : http://demo.localhost:5173")
+    print(f"   URL Production : https://demo.sg-stocks.com")
+    print(f"   Email          : demo@sgstock.cm")
+    print(f"   Password       : demo1234")
     print()
-    print("[ATTENTION]  IMPORTANT:")
-    print("   - Ce tenant est partagé par tous les utilisateurs de la démo")
-    print("   - Les données seront réinitialisées quotidiennement (script à configurer)")
-    print("   - Utilisez 'python populate_demo_data.py' pour ajouter des données")
+    print("📊 LIMITES DU TENANT DÉMO:")
+    print(f"   • Utilisateurs max    : 10")
+    print(f"   • Magasins max        : 2")
+    print(f"   • Produits max        : 999,999 (illimité)")
+    print(f"   • Stockage max        : 5 GB")
+    print(f"   • Plan                : Business (toutes fonctionnalités)")
+    print(f"   • Expiration          : {date.today() + timedelta(days=3650)} (10 ans)")
+    print()
+    print("⚠️  IMPORTANT:")
+    print("   - Ce tenant est PARTAGÉ par tous les visiteurs de la démo")
+    print("   - Les clients peuvent créer autant de produits qu'ils veulent")
+    print("   - Pensez à RÉINITIALISER les données quotidiennement (cron job)")
+    print("   - Utilisez ce tenant pour montrer l'application aux prospects")
+    print()
+    print("💡 UTILISATION:")
+    print("   1. Partagez le lien: https://demo.sg-stocks.com")
+    print("   2. Les clients testent avec: demo@sgstock.cm / demo1234")
+    print("   3. Ils peuvent créer produits, ventes, clients, etc.")
+    print("   4. Toutes les fonctionnalités sont activées")
     print()
     
     return True
