@@ -78,21 +78,21 @@ def create_demo_tenant():
     # Créer les domaines
     print(" Création des domaines...")
     
-    # Domaine localhost
+    # Domaine localhost (développement)
     Domain.objects.create(
         domain='demo.localhost',
         tenant=demo,
-        is_primary=True
+        is_primary=False  # Secondaire (pour développement local)
     )
-    print("   [OK] demo.localhost")
+    print("   [OK] demo.localhost (développement)")
     
-    # Domaine production
+    # Domaine production (PRINCIPAL)
     Domain.objects.create(
         domain='demo.sg-stocks.com',
         tenant=demo,
-        is_primary=False
+        is_primary=True  # Principal (production)
     )
-    print("   [OK] demo.sg-stocks.com")
+    print("   [OK] demo.sg-stocks.com (PRINCIPAL)")
     
     # Créer le DNS Cloudflare automatiquement
     print("\n☁️  Création du DNS Cloudflare...")
