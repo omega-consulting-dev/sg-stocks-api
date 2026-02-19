@@ -5,6 +5,21 @@ from apps.cashbox.models import Cashbox, CashboxSession, CashMovement, CashCount
 class CashboxSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     
+    def validate_code(self, value):
+        """Validate that code is unique among active cashboxes."""
+        if not value:
+            raise serializers.ValidationError("Le code de la caisse est obligatoire.")
+        
+        instance = self.instance
+        queryset = Cashbox.objects.filter(code=value, is_active=True)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        
+        if queryset.exists():
+            raise serializers.ValidationError("Une caisse avec ce code existe déjà.")
+        
+        return value
+    
     class Meta:
         model = Cashbox
         fields = ['id', 'name', 'code', 'store', 'store_name', 'current_balance', 'is_active', 'created_at']

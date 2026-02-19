@@ -183,6 +183,10 @@ class StoreViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.updated_by = self.request.user
         instance.save()
+        
+        # Soft delete cascading: désactiver également les caisses associées
+        from apps.cashbox.models import Cashbox
+        Cashbox.objects.filter(store=instance, is_active=True).update(is_active=False)
     
     @extend_schema(summary="Statistiques d'un magasin", tags=["Inventory"])
     @action(detail=True, methods=['get'])

@@ -12,7 +12,7 @@ class Cashbox(AuditModel):
     Cashbox model representing a physical cash register.
     """
     name = models.CharField(max_length=100, verbose_name="Nom")
-    code = models.CharField(max_length=20, unique=True, verbose_name="Code")
+    code = models.CharField(max_length=20, verbose_name="Code")
     store = models.ForeignKey(
         'inventory.Store',
         on_delete=models.PROTECT,
@@ -35,6 +35,13 @@ class Cashbox(AuditModel):
         verbose_name = "Caisse"
         verbose_name_plural = "Caisses"
         ordering = ['store', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=models.Q(is_active=True),
+                name='unique_active_cashbox_code'
+            )
+        ]
     
     def __str__(self):
         return f"{self.code} - {self.name}"
