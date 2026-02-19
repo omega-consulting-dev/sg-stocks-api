@@ -12,7 +12,7 @@ class Store(ActiveModel, AuditModel):
     Store/Point of Sale model.
     """
     name = models.CharField(max_length=100, verbose_name="Nom")
-    code = models.CharField(max_length=20, unique=True, verbose_name="Code")
+    code = models.CharField(max_length=20, verbose_name="Code")
     
     # Location
     address = models.TextField(verbose_name="Adresse")
@@ -47,6 +47,13 @@ class Store(ActiveModel, AuditModel):
         verbose_name = "Point de vente/Magasin"
         verbose_name_plural = "Points de vente/Magasins"
         ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=models.Q(is_active=True),
+                name='unique_active_store_code'
+            )
+        ]
     
     def __str__(self):
         return f"{self.code} - {self.name}"
