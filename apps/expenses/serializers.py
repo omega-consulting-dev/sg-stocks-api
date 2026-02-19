@@ -3,6 +3,16 @@ from apps.expenses.models import Expense, ExpenseCategory
 
 
 class ExpenseCategorySerializer(serializers.ModelSerializer):
+    def validate_code(self, value):
+        """Validate that code is unique among active expense categories."""
+        instance = self.instance
+        queryset = ExpenseCategory.objects.filter(code=value, is_active=True)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Une catégorie de dépense avec ce code existe déjà.")
+        return value
+    
     class Meta:
         model = ExpenseCategory
         fields = ['id', 'name', 'code', 'description', 'is_active', 'created_at']

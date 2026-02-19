@@ -25,7 +25,6 @@ class Customer(ActiveModel, AuditModel):
     name = models.CharField(max_length=200, verbose_name="Nom/Raison sociale")
     customer_code = models.CharField(
         max_length=50,
-        unique=True,
         verbose_name="Code client"
     )
     
@@ -72,6 +71,13 @@ class Customer(ActiveModel, AuditModel):
         verbose_name = "Client"
         verbose_name_plural = "Clients"
         ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['customer_code'],
+                condition=models.Q(is_active=True),
+                name='unique_active_customer_code'
+            )
+        ]
     
     def __str__(self):
         return f"{self.customer_code} - {self.name}"

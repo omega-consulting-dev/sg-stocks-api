@@ -12,7 +12,7 @@ class ExpenseCategory(AuditModel):
     Expense category model.
     """
     name = models.CharField(max_length=100, verbose_name="Nom")
-    code = models.CharField(max_length=20, unique=True, verbose_name="Code")
+    code = models.CharField(max_length=20, verbose_name="Code")
     description = models.TextField(blank=True, verbose_name="Description")
     is_active = models.BooleanField(default=True, verbose_name="Active")
     
@@ -20,6 +20,13 @@ class ExpenseCategory(AuditModel):
         verbose_name = "Catégorie de dépense"
         verbose_name_plural = "Catégories de dépenses"
         ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code'],
+                condition=models.Q(is_active=True),
+                name='unique_active_expense_category_code'
+            )
+        ]
     
     def __str__(self):
         return f"{self.code} - {self.name}"

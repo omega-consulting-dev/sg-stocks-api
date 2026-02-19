@@ -88,16 +88,13 @@ class SupplierCreateUpdateSerializer(serializers.ModelSerializer):
         ]
     
     def validate_supplier_code(self, value):
-        """Ensure supplier code is unique."""
+        """Ensure supplier code is unique among active suppliers."""
         instance = self.instance
+        queryset = Supplier.objects.filter(supplier_code=value, is_active=True)
         if instance:
-            # Update case - exclude current instance
-            if Supplier.objects.exclude(pk=instance.pk).filter(supplier_code=value).exists():
-                raise serializers.ValidationError("Ce code fournisseur existe déjà.")
-        else:
-            # Create case
-            if Supplier.objects.filter(supplier_code=value).exists():
-                raise serializers.ValidationError("Ce code fournisseur existe déjà.")
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Ce code fournisseur existe déjà.")
         return value
     
     def create(self, validated_data):
@@ -115,7 +112,8 @@ class SupplierCreateUpdateSerializer(serializers.ModelSerializer):
                 next_number = 1
             
             supplier_code = f"FRN{next_number:05d}"
-            while Supplier.objects.filter(supplier_code=supplier_code).exists():
+            # Ensure uniqueness among active suppliers
+            while Supplier.objects.filter(supplier_code=supplier_code, is_active=True).exists():
                 next_number += 1
                 supplier_code = f"FRN{next_number:05d}"
             

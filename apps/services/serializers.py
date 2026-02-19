@@ -21,9 +21,12 @@ class ServiceCategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['created_at', 'updated_at']
     
     def validate_name(self, value):
-        """Validate unique category name."""
+        """Validate unique category name among active categories."""
         instance = self.instance
-        if ServiceCategory.objects.exclude(pk=instance.pk if instance else None).filter(name=value).exists():
+        queryset = ServiceCategory.objects.filter(name=value, is_active=True)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
             raise serializers.ValidationError("Une catégorie de service avec ce nom existe déjà.")
         return value
  
@@ -89,9 +92,12 @@ class ServiceCreateUpdateSerializer(serializers.ModelSerializer):
         ]
     
     def validate_reference(self, value):
-        """Validate unique reference."""
+        """Validate unique reference among active services."""
         instance = self.instance
-        if Service.objects.exclude(pk=instance.pk if instance else None).filter(reference=value).exists():
+        queryset = Service.objects.filter(reference=value, is_active=True)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
             raise serializers.ValidationError("Un service avec cette référence existe déjà.")
         return value
 

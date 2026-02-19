@@ -81,16 +81,13 @@ class CustomerCreateUpdateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
     
     def validate_customer_code(self, value):
-        """Ensure customer code is unique."""
+        """Ensure customer code is unique among active customers."""
         instance = self.instance
+        queryset = Customer.objects.filter(customer_code=value, is_active=True)
         if instance:
-            # Update case - exclude current instance
-            if Customer.objects.exclude(pk=instance.pk).filter(customer_code=value).exists():
-                raise serializers.ValidationError("Ce code client existe déjà.")
-        else:
-            # Create case
-            if Customer.objects.filter(customer_code=value).exists():
-                raise serializers.ValidationError("Ce code client existe déjà.")
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("Ce code client existe déjà.")
         return value
     
     def create(self, validated_data):
@@ -108,8 +105,8 @@ class CustomerCreateUpdateSerializer(serializers.ModelSerializer):
             
             validated_data['customer_code'] = f"CLI{next_id:05d}"
             
-            # Ensure uniqueness in case of concurrent requests
-            while Customer.objects.filter(customer_code=validated_data['customer_code']).exists():
+            # Ensure uniqueness among active customers in case of concurrent requests
+            while Customer.objects.filter(customer_code=validated_data['customer_code'], is_active=True).exists():
                 next_id += 1
                 validated_data['customer_code'] = f"CLI{next_id:05d}"
         

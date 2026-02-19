@@ -26,7 +26,6 @@ class Supplier(ActiveModel, AuditModel):
     name = models.CharField(max_length=200, verbose_name="Raison sociale")
     supplier_code = models.CharField(
         max_length=50,
-        unique=True,
         verbose_name="Code fournisseur"
     )
     
@@ -78,6 +77,13 @@ class Supplier(ActiveModel, AuditModel):
         verbose_name = "Fournisseur"
         verbose_name_plural = "Fournisseurs"
         ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['supplier_code'],
+                condition=models.Q(is_active=True),
+                name='unique_active_supplier_code'
+            )
+        ]
     
     def __str__(self):
         return f"{self.supplier_code} - {self.name}"

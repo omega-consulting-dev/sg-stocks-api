@@ -11,7 +11,7 @@ class ServiceCategory(ActiveModel, AuditModel):
     """
     Service category model.
     """
-    name = models.CharField(max_length=100, unique=True, verbose_name="Désignation")
+    name = models.CharField(max_length=100, verbose_name="Désignation")
     description = models.TextField(blank=True, verbose_name="Description")
     
     class Meta:
@@ -21,6 +21,13 @@ class ServiceCategory(ActiveModel, AuditModel):
         indexes = [
             models.Index(fields=['is_active', 'name']),
             models.Index(fields=['created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['name'],
+                condition=models.Q(is_active=True),
+                name='unique_active_service_category_name'
+            )
         ]
     
     def __str__(self):
@@ -36,7 +43,6 @@ class Service(ActiveModel, AuditModel):
     description = models.TextField(blank=True, verbose_name="Description détaillée")
     reference = models.CharField(
         max_length=50,
-        unique=True,
         verbose_name="Référence"
     )
     
@@ -85,6 +91,13 @@ class Service(ActiveModel, AuditModel):
         verbose_name = "Service"
         verbose_name_plural = "Services"
         ordering = ['name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reference'],
+                condition=models.Q(is_active=True),
+                name='unique_active_service_reference'
+            )
+        ]
     
     def __str__(self):
         return f"{self.reference} - {self.name}"
