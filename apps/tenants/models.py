@@ -236,8 +236,87 @@ class Company(TenantMixin):
         else:
             return self.renewal_price if self.renewal_price > 0 else self.get_plan_price()
     
+    def apply_plan_limits(self):
+        """Applique les limites et features selon le plan sélectionné."""
+        plan_configs = {
+            'starter': {
+                'first_payment': Decimal('229900.00'),
+                'renewal': Decimal('100000.00'),
+                'trial_days': 14,
+                'max_users': 10,
+                'max_stores': 1,
+                'max_warehouses': 0,
+                'max_products': 999999,
+                'max_storage_mb': 15360,
+                'feature_services': True,
+                'feature_multi_store': False,
+                'feature_loans': False,
+                'feature_advanced_analytics': False,
+                'feature_api_access': False,
+            },
+            'business': {
+                'first_payment': Decimal('449900.00'),
+                'renewal': Decimal('150000.00'),
+                'trial_days': 14,
+                'max_users': 15,
+                'max_stores': 1,
+                'max_warehouses': 1,
+                'max_products': 999999,
+                'max_storage_mb': 30720,
+                'feature_services': True,
+                'feature_multi_store': True,
+                'feature_loans': True,
+                'feature_advanced_analytics': True,
+                'feature_api_access': False,
+            },
+            'enterprise': {
+                'first_payment': Decimal('699900.00'),
+                'renewal': Decimal('250000.00'),
+                'trial_days': 14,
+                'max_users': 999999,
+                'max_stores': 999999,
+                'max_warehouses': 999999,
+                'max_products': 999999,
+                'max_storage_mb': 51200,
+                'feature_services': True,
+                'feature_multi_store': True,
+                'feature_loans': True,
+                'feature_advanced_analytics': True,
+                'feature_api_access': True,
+            }
+        }
+        
+        if self.plan in plan_configs:
+            config = plan_configs[self.plan]
+            # Appliquer les limites
+            self.max_users = config['max_users']
+            self.max_stores = config['max_stores']
+            self.max_warehouses = config['max_warehouses']
+            self.max_products = config['max_products']
+            self.max_storage_mb = config['max_storage_mb']
+            # Appliquer les features
+            self.feature_services = config['feature_services']
+            self.feature_multi_store = config['feature_multi_store']
+            self.feature_loans = config['feature_loans']
+            self.feature_advanced_analytics = config['feature_advanced_analytics']
+            self.feature_api_access = config['feature_api_access']
+            # Appliquer les prix
+            self.first_payment_price = config['first_payment']
+            self.renewal_price = config['renewal']
+            self.trial_days = config['trial_days']
+    
     def save(self, *args, **kwargs):
-        """Override save pour mettre à jour le prix automatiquement."""
+        """Override save pour mettre à jour le prix et les limites automatiquement."""
+        # Détecter un changement de plan
+        if self.pk:
+            try:
+                old_instance = Company.objects.get(pk=self.pk)
+                if old_instance.plan != self.plan:
+                    # Le plan a changé, appliquer les nouvelles limites
+                    self.apply_plan_limits()
+            except Company.DoesNotExist:
+                pass
+        
         # Pour les plans prédéfinis, toujours recalculer le prix
         if self.plan in ['starter', 'business', 'enterprise']:
             self.monthly_price = self.get_plan_price()
