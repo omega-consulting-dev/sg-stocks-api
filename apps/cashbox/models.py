@@ -12,7 +12,7 @@ class Cashbox(AuditModel):
     Cashbox model representing a physical cash register.
     """
     name = models.CharField(max_length=100, verbose_name="Nom")
-    code = models.CharField(max_length=20, verbose_name="Code")
+    code = models.CharField(max_length=50, verbose_name="Code")
     store = models.ForeignKey(
         'inventory.Store',
         on_delete=models.PROTECT,

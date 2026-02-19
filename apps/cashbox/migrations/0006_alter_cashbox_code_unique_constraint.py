@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='cashbox',
             name='code',
-            field=models.CharField(max_length=20, verbose_name='Code'),
+            field=models.CharField(max_length=50, verbose_name='Code'),
         ),
         migrations.AddConstraint(
             model_name='cashbox',
