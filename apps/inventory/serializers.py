@@ -40,13 +40,14 @@ class StoreSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_at', 'updated_at']
     
     def validate_code(self, value):
-        """Validate that code is unique."""
+        """Validate that code is unique among active stores."""
         if not value:
             raise serializers.ValidationError("Le code du magasin est obligatoire.")
         
         # Vérifier l'unicité en excluant l'instance actuelle si en mode édition
+        # et en excluant les magasins désactivés (soft deleted)
         instance = self.instance
-        queryset = Store.objects.filter(code=value)
+        queryset = Store.objects.filter(code=value, is_active=True)
         if instance:
             queryset = queryset.exclude(pk=instance.pk)
         
