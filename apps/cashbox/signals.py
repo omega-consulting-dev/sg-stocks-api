@@ -15,28 +15,22 @@ def create_cashbox_for_store(sender, instance, created, **kwargs):
     """
     if created:
         from apps.cashbox.models import Cashbox
+        from django.utils import timezone
         
         # Vérifier si une caisse existe déjà pour ce store
         if not Cashbox.objects.filter(store=instance, is_active=True).exists():
-            # Vérifier si une caisse inactive avec ce code existe
-            cashbox_code = f"CAISSE-{instance.code}"
-            existing_cashbox = Cashbox.objects.filter(code=cashbox_code, is_active=False).first()
+            # Toujours créer une NOUVELLE caisse avec un code unique (inclut timestamp)
+            # Format: CAISSE-STR-001-1708345678 (code unique par création)
+            timestamp = int(timezone.now().timestamp())
+            cashbox_code = f"CAISSE-{instance.code}-{timestamp}"
             
-            if existing_cashbox:
-                # Réactiver la caisse existante
-                existing_cashbox.name = f"Caisse {instance.name}"
-                existing_cashbox.store = instance
-                existing_cashbox.is_active = True
-                existing_cashbox.save()
-            else:
-                # Créer une nouvelle caisse
-                Cashbox.objects.create(
-                    name=f"Caisse {instance.name}",
-                    code=cashbox_code,
-                    store=instance,
-                    current_balance=0,
-                    is_active=True
-                )
+            Cashbox.objects.create(
+                name=f"Caisse {instance.name}",
+                code=cashbox_code,
+                store=instance,
+                current_balance=0,
+                is_active=True
+            )
 
 
 # ========== SIGNAUX POUR METTRE À JOUR LA CAISSE ==========
