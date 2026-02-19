@@ -163,8 +163,8 @@ class Company(TenantMixin):
         if self.max_stores == 0 or self.max_stores >= 999999:
             return True
         from apps.inventory.models import Store
-        # Compter uniquement les points de vente (store_type='retail')
-        current_stores = Store.objects.filter(store_type='retail').count()
+        # Compter uniquement les points de vente actifs (store_type='retail' et is_active=True)
+        current_stores = Store.objects.filter(store_type='retail', is_active=True).count()
         return current_stores < self.max_stores
     
     def can_add_warehouse(self):
@@ -176,8 +176,8 @@ class Company(TenantMixin):
         if self.max_warehouses >= 999999:
             return True
         from apps.inventory.models import Store
-        # Compter uniquement les magasins/entrepôts (store_type in ['warehouse', 'both'])
-        current_warehouses = Store.objects.filter(store_type__in=['warehouse', 'both']).count()
+        # Compter uniquement les magasins/entrepôts actifs (store_type in ['warehouse', 'both'] et is_active=True)
+        current_warehouses = Store.objects.filter(store_type__in=['warehouse', 'both'], is_active=True).count()
         return current_warehouses < self.max_warehouses
     
     def has_feature(self, feature_name):
