@@ -109,9 +109,12 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         ]
     
     def validate_reference(self, value):
-        """Validate that reference is unique."""
+        """Validate that reference is unique among active products."""
         instance = self.instance
-        if Product.objects.exclude(pk=instance.pk if instance else None).filter(reference=value).exists():
+        queryset = Product.objects.filter(reference=value, is_active=True)
+        if instance:
+            queryset = queryset.exclude(pk=instance.pk)
+        if queryset.exists():
             raise serializers.ValidationError("Un produit avec cette référence existe déjà.")
         return value
     

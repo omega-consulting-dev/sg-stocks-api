@@ -58,12 +58,10 @@ class Product(ActiveModel, AuditModel):
     description = models.TextField(blank=True, verbose_name="Description")
     reference = models.CharField(
         max_length=50,
-        unique=True,
         verbose_name="Référence"
     )
     barcode = models.CharField(
         max_length=50,
-        unique=True,
         null=True,
         blank=True,
         verbose_name="Code-barres"
@@ -157,6 +155,18 @@ class Product(ActiveModel, AuditModel):
             models.Index(fields=['barcode']),
             models.Index(fields=['created_at']),
             models.Index(fields=['is_for_sale', 'is_active']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reference'],
+                condition=models.Q(is_active=True),
+                name='unique_active_product_reference'
+            ),
+            models.UniqueConstraint(
+                fields=['barcode'],
+                condition=models.Q(is_active=True, barcode__isnull=False),
+                name='unique_active_product_barcode'
+            )
         ]
     
     def __str__(self):
