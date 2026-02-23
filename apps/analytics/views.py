@@ -194,30 +194,36 @@ class DashboardViewSet(viewsets.ViewSet):
                 ).count(),
             }
         
-        # Cash statistics - Utiliser la même fonction que l'API /cashbox/caisse/solde/
+        # Cash statistics - calcul basé sur les ventes uniquement (exclut les paiements de facture
+        # qui sont créés automatiquement lors de la génération d'une facture à partir d'une vente)
+        # Pour garder la compatibilité, on utilise la fonction utilitaire pour le "solde réel"
+        # puis on soustrait les paiements de facture afin d'obtenir le solde basé uniquement sur les ventes.
         from apps.cashbox.utils import get_cashbox_real_balance
-        
-        # Si un store est filtré, calculer uniquement pour ce store
+        from apps.invoicing.models import InvoicePayment
+        from apps.sales.models import Sale
+        from apps.inventory.models import Store
+
+        def _sales_only_balance_for_store(sid):
+            real = get_cashbox_real_balance(store_id=sid)
+            inv_qs = InvoicePayment.objects.filter(payment_method='cash', invoice__store_id=sid)
+            total_inv = inv_qs.aggregate(total=Sum('amount'))['total'] or 0
+            # sales totals (paid amounts) for transparency
+            sales_qs = Sale.objects.filter(payment_method='cash', store_id=sid)
+            total_sales = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
+            sales_only = real - total_inv
+            return float(sales_only), float(total_sales), float(total_inv)
+
+        # Calculer selon le scope (store filter / assigned / all)
         if store_filter and assigned_stores:
-            cash_balance = sum(
-                get_cashbox_real_balance(store_id=s.id) 
-                for s in assigned_stores
-            )
+            cash_balance = sum(_sales_only_balance_for_store(s.id)[0] for s in assigned_stores)
         elif user.is_superuser or (hasattr(user, 'role') and user.role and user.role.access_scope == 'all'):
-            # Admin voit tout - solde total de tous les stores (ou store filtré)
-            from apps.inventory.models import Store
             stores_to_calc = assigned_stores if assigned_stores else Store.objects.filter(is_active=True)
-            cash_balance = sum(
-                get_cashbox_real_balance(store_id=s.id) 
-                for s in stores_to_calc
-            )
+            cash_balance = sum(_sales_only_balance_for_store(s.id)[0] for s in stores_to_calc)
         else:
-            # Utilisateur normal voit uniquement ses stores assignés
             if hasattr(user, 'assigned_stores') and user.assigned_stores.exists():
-                cash_balance = sum(
-                    get_cashbox_real_balance(store_id=s.id) 
-                    for s in user.assigned_stores.all()
-                )
+                cash_balance = sum(_sales_only_balance_for_store(s.id)[0] for s in user.assigned_stores.all())
+            else:
+                cash_balance = 0
             else:
                 cash_balance = 0
         
