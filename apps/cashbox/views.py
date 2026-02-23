@@ -288,6 +288,10 @@ class EncaissementsListView(APIView):
         # Trier par date décroissante
         encaissements.sort(key=lambda x: x['date'], reverse=True)
         
+        # calculer totaux séparés pour ventes et paiements de factures
+        total_sales = sum(item['montant'] for item in encaissements if item['type'] == 'sale')
+        total_invoice_payments = sum(item['montant'] for item in encaissements if item['type'] == 'invoice_payment')
+        
         # Paginer les résultats
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 20))
@@ -300,7 +304,9 @@ class EncaissementsListView(APIView):
             'count': len(encaissements),
             'next': None if end_idx >= len(encaissements) else f'?page={page + 1}',
             'previous': None if page == 1 else f'?page={page - 1}',
-            'results': paginated
+            'results': paginated,
+            'total_sales': total_sales,
+            'total_invoice_payments': total_invoice_payments,
         })
 
 
@@ -433,12 +439,12 @@ class EncaissementsExportView(APIView):
             ws.cell(row=row_num, column=6, value=enc['mode_paiement'])
             ws.cell(row=row_num, column=7, value=enc['client'])
         
-        # Ajouter une ligne de total
+        # Ajouter une ligne de total (uniquement ventes)
         total_row = len(encaissements) + 2
-        ws.cell(row=total_row, column=4, value="TOTAL")
+        ws.cell(row=total_row, column=4, value="TOTAL (ventes)")
         ws.cell(row=total_row, column=4).font = Font(bold=True)
-        total_montant = sum(enc['montant'] for enc in encaissements)
-        ws.cell(row=total_row, column=5, value=total_montant)
+        total_sales = sum(enc['montant'] for enc in encaissements if enc['type'] == 'sale')
+        ws.cell(row=total_row, column=5, value=total_sales)
         ws.cell(row=total_row, column=5).font = Font(bold=True)
         
         # Ajuster la largeur des colonnes
@@ -500,20 +506,47 @@ class CaisseSoldeView(APIView):
         # Admin ou access_scope='all' : calculer le solde
         from apps.cashbox.utils import get_cashbox_real_balance
         
+        # récupérer les totaux de la fonction utilitaire (inclut ventes + paiements factures ...)
         if store_id:
-            # Calculer pour un store spécifique
             real_balance = get_cashbox_real_balance(store_id=store_id)
+            # pour sales uniquement, on recalculera en soustrayant paiements facture
+            # mais comme la fonction n'expose pas les sous-totaux, recalculons ici
+            from apps.invoicing.models import InvoicePayment
+            from apps.sales.models import Sale
+            inv_qs = InvoicePayment.objects.filter(payment_method='cash', invoice__store_id=store_id)
+            total_inv = inv_qs.aggregate(total=Sum('amount'))['total'] or 0
+            sales_qs = Sale.objects.filter(payment_method='cash', store_id=store_id)
+            total_sales = sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
         else:
-            # Calculer le total pour tous les stores
             from apps.inventory.models import Store
             all_stores = Store.objects.filter(is_active=True)
             real_balance = sum(
                 get_cashbox_real_balance(store_id=s.id) 
                 for s in all_stores
             )
+            from apps.invoicing.models import InvoicePayment
+            from apps.sales.models import Sale
+            total_inv = 0
+            total_sales = 0
+            for s in all_stores:
+                inv_qs = InvoicePayment.objects.filter(payment_method='cash', invoice__store_id=s.id)
+                total_inv += inv_qs.aggregate(total=Sum('amount'))['total'] or 0
+                sales_qs = Sale.objects.filter(payment_method='cash', store_id=s.id)
+                total_sales += sales_qs.aggregate(total=Sum('paid_amount'))['total'] or 0
+        
+        # calculer solde basé uniquement sur ventes (en excluant paiements de factures)
+        sales_only_balance = real_balance - total_inv
         
         return Response({
-            'solde_actuel': float(real_balance),
+            'solde_actuel': float(sales_only_balance),
+            'solde_reel': float(real_balance),
+            'total_encaissements': float(total_sales + 0),
+            'total_sorties': 0.0,  # non calculé, renvoyé pour compatibilité
+            'details': {
+                'paiements_factures': float(total_inv),
+                'ventes': float(total_sales),
+                # autres détails pourront être ajoutés si besoin
+            }
         })
 
 
