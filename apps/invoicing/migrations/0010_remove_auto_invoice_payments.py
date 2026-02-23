@@ -21,7 +21,7 @@ def reverse_remove_auto_invoice_payments(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('invoicing', '0009_invoicepayment_alter_invoice_options_and_more'),
+        ('invoicing', '0003_alter_invoicepayment_payment_method'),
     ]
 
     operations = [
