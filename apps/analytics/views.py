@@ -224,8 +224,6 @@ class DashboardViewSet(viewsets.ViewSet):
                 cash_balance = sum(_sales_only_balance_for_store(s.id)[0] for s in user.assigned_stores.all())
             else:
                 cash_balance = 0
-            else:
-                cash_balance = 0
         
         # Pending items (filtered by user)
         pending = {
