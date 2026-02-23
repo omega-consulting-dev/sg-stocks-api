@@ -232,19 +232,9 @@ class Invoice(AuditModel):
         # Cela diminuera le stock automatiquement
         create_stock_movements_from_invoice(sender=cls, instance=invoice, created=True)
         
-        # Si la vente a un montant payé, créer un InvoicePayment
-        if sale.paid_amount > 0:
-            payment_method = getattr(sale, 'payment_method', 'cash')  # Défaut à 'cash' si non défini
-            # Utiliser le created_by de la vente pour le paiement
-            payment_created_by = getattr(sale, 'created_by', None)
-            InvoicePayment.objects.create(
-                invoice=invoice,
-                payment_date=sale.sale_date,
-                amount=sale.paid_amount,
-                payment_method=payment_method,
-                notes=f"Paiement automatique lors de la vente {sale.sale_number}",
-                created_by=payment_created_by
-            )
+        # Note: InvoicePayment is NOT automatically created anymore.
+        # The sale payment is already recorded, so we don't create duplicate payment entries.
+        # If needed, payments can be recorded separately via the admin interface or API.
         
         return invoice
     
