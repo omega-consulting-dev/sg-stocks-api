@@ -16,6 +16,16 @@ from apps.cashbox.models import Cashbox
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.filter(is_active=True)
     serializer_class = ExpenseCategorySerializer
+    
+    def destroy(self, request, *args, **kwargs):
+        """
+        Soft-delete: marquer la catégorie comme inactive au lieu de la supprimer.
+        Cela évite les erreurs de contrainte de clé étrangère.
+        """
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
