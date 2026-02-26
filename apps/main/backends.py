@@ -19,12 +19,15 @@ class TenantAuthBackend(ModelBackend):
         schema_name = tenant.schema_name if tenant else connection.schema_name
         
         if schema_name == get_public_schema_name():
-            from apps.main.models import User as MainUser
+            # En schéma public, on utilise le modèle configuré par AUTH_USER_MODEL
+            from django.contrib.auth import get_user_model
+            PublicUser = get_user_model()
             try:
-                user = MainUser.objects.get(email=login_id)
+                user = PublicUser.objects.get(email=login_id)
+                # Uniquement les comptes staff peuvent se loguer via l'admin
                 if user.check_password(password) and user.is_staff:
                     return user
-            except MainUser.DoesNotExist:
+            except PublicUser.DoesNotExist:
                 pass
 
         else:
