@@ -214,7 +214,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(expense)
         return Response(serializer.data)
     
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], url_path='export_excel')
     def export_excel(self, request):
         """Export expenses to Excel."""
         expenses = self.filter_queryset(self.get_queryset())

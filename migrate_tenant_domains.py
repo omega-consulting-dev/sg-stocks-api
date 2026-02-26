@@ -27,7 +27,7 @@ def migrate_tenant_domains():
     tenants = Company.objects.exclude(schema_name='public')
     cloudflare = CloudflareService()
     
-    print(f"🔍 Trouvé {tenants.count()} tenant(s) à migrer...")
+    print(f" Trouvé {tenants.count()} tenant(s) à migrer...")
     
     for tenant in tenants:
         new_domain = f"{tenant.schema_name}.sg-stocks.com"
@@ -42,7 +42,7 @@ def migrate_tenant_domains():
                 tenant=tenant,
                 is_primary=True
             )
-            print(f"  ✅ {tenant.name} ({tenant.schema_name}) : Créé {new_domain}")
+            print(f"   {tenant.name} ({tenant.schema_name}) : Créé {new_domain}")
             
             # Mettre à jour les anciens domaines pour ne plus être primary
             Domain.objects.filter(
