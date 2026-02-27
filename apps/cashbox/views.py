@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 from django.db.models import Q, Sum, F
 from django.db import IntegrityError, transaction
+from uuid import uuid4
 from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
 from apps.cashbox.serializers import (
     CashboxSerializer, 
@@ -1864,11 +1865,16 @@ def _get_or_create_cashbox_session_for_store(store_id, user):
 
 
 def _generate_unique_movement_number(prefix):
-    for _ in range(20):
-        candidate = f"{prefix}-{timezone.now().strftime('%Y%m%d%H%M%S%f')}"
-        if not CashMovement.objects.filter(movement_number=candidate).exists():
-            return candidate
-    raise RuntimeError("Impossible de générer un numéro de mouvement unique")
+    return f"{prefix}-{uuid4().hex[:12].upper()}"
+
+
+def _normalize_store_id(raw_store_id):
+    if raw_store_id in (None, '', 'all'):
+        return None
+    try:
+        return int(raw_store_id)
+    except (TypeError, ValueError):
+        return None
 
 
 class MobileMoneyDepositCreateView(APIView):
@@ -1876,7 +1882,7 @@ class MobileMoneyDepositCreateView(APIView):
         amount = request.data.get('amount')
         description = request.data.get('description') or request.data.get('motif') or 'Dépôt Mobile Money'
         date = request.data.get('date')
-        store_id = request.query_params.get('store') or request.data.get('store_id')
+        store_id = _normalize_store_id(request.query_params.get('store') or request.data.get('store_id'))
 
         if not store_id:
             return Response({'error': 'Le point de vente est requis'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1896,28 +1902,20 @@ class MobileMoneyDepositCreateView(APIView):
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        movement = None
-        for _ in range(10):
-            movement_number = _generate_unique_movement_number('MMD')
-            try:
-                with transaction.atomic():
-                    movement = CashMovement.objects.create(
-                        movement_number=movement_number,
-                        cashbox_session=session,
-                        movement_type='out',
-                        category='bank_deposit',
-                        amount=amount,
-                        payment_method='mobile_money',
-                        description=description,
-                        created_by=request.user,
-                    )
-                break
-            except IntegrityError:
-                movement = None
-                continue
-
-        if movement is None:
-            return Response({'error': 'Impossible de générer un numéro de mouvement unique. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            with transaction.atomic():
+                movement = CashMovement.objects.create(
+                    movement_number=_generate_unique_movement_number('MMD'),
+                    cashbox_session=session,
+                    movement_type='out',
+                    category='bank_deposit',
+                    amount=amount,
+                    payment_method='mobile_money',
+                    description=description,
+                    created_by=request.user,
+                )
+        except IntegrityError:
+            return Response({'error': 'Impossible d\'enregistrer le dépôt Mobile Money. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if date:
             try:
@@ -1942,7 +1940,7 @@ class MobileMoneyWithdrawalCreateView(APIView):
         amount = request.data.get('amount')
         description = request.data.get('description') or request.data.get('motif') or 'Retrait Mobile Money'
         date = request.data.get('date')
-        store_id = request.query_params.get('store') or request.data.get('store_id')
+        store_id = _normalize_store_id(request.query_params.get('store') or request.data.get('store_id'))
 
         if not store_id:
             return Response({'error': 'Le point de vente est requis'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1969,28 +1967,20 @@ class MobileMoneyWithdrawalCreateView(APIView):
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        movement = None
-        for _ in range(10):
-            movement_number = _generate_unique_movement_number('MMW')
-            try:
-                with transaction.atomic():
-                    movement = CashMovement.objects.create(
-                        movement_number=movement_number,
-                        cashbox_session=session,
-                        movement_type='in',
-                        category='bank_withdrawal',
-                        amount=amount,
-                        payment_method='mobile_money',
-                        description=description,
-                        created_by=request.user,
-                    )
-                break
-            except IntegrityError:
-                movement = None
-                continue
-
-        if movement is None:
-            return Response({'error': 'Impossible de générer un numéro de mouvement unique. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        try:
+            with transaction.atomic():
+                movement = CashMovement.objects.create(
+                    movement_number=_generate_unique_movement_number('MMW'),
+                    cashbox_session=session,
+                    movement_type='in',
+                    category='bank_withdrawal',
+                    amount=amount,
+                    payment_method='mobile_money',
+                    description=description,
+                    created_by=request.user,
+                )
+        except IntegrityError:
+            return Response({'error': 'Impossible d\'enregistrer le retrait Mobile Money. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if date:
             try:
