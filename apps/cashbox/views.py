@@ -1580,3 +1580,523 @@ class BankTransactionsExportExcelView(APIView):
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         
         return response
+
+
+def _get_user_scoped_mobile_money_sources(user):
+    deposits = CashMovement.objects.filter(
+        category='bank_deposit',
+        payment_method='mobile_money'
+    ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store')
+
+    withdrawals = CashMovement.objects.filter(
+        category='bank_withdrawal',
+        payment_method='mobile_money'
+    ).select_related('cashbox_session', 'cashbox_session__cashbox', 'cashbox_session__cashbox__store')
+
+    sales = Sale.objects.filter(payment_method='mobile_money').select_related('store')
+    invoice_payments = InvoicePayment.objects.filter(payment_method='mobile_money').select_related('invoice__store')
+    expenses = Expense.objects.filter(status='paid', payment_method='mobile_money').select_related('store')
+    supplier_payments = SupplierPayment.objects.filter(payment_method='mobile_money').select_related('purchase_order__store', 'supplier')
+    loan_payments = LoanPayment.objects.filter(payment_method='mobile_money').select_related('loan__store', 'loan')
+
+    if user.is_superuser:
+        return deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments
+
+    if hasattr(user, 'role') and user.role:
+        if user.role.access_scope == 'all':
+            return deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments
+        if user.role.access_scope == 'assigned':
+            assigned_stores = user.assigned_stores.all()
+            deposits = deposits.filter(cashbox_session__cashbox__store__in=assigned_stores)
+            withdrawals = withdrawals.filter(cashbox_session__cashbox__store__in=assigned_stores)
+            sales = sales.filter(store__in=assigned_stores)
+            invoice_payments = invoice_payments.filter(invoice__store__in=assigned_stores)
+            expenses = expenses.filter(store__in=assigned_stores)
+            supplier_payments = supplier_payments.filter(purchase_order__store__in=assigned_stores)
+            loan_payments = loan_payments.filter(loan__store__in=assigned_stores)
+            return deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments
+        if user.role.access_scope == 'own':
+            deposits = deposits.filter(created_by=user)
+            withdrawals = withdrawals.filter(created_by=user)
+            sales = sales.filter(created_by=user)
+            invoice_payments = invoice_payments.filter(created_by=user)
+            expenses = expenses.filter(created_by=user)
+            supplier_payments = supplier_payments.filter(created_by=user)
+            loan_payments = loan_payments.filter(created_by=user)
+            return deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments
+
+    deposits = deposits.filter(created_by=user)
+    withdrawals = withdrawals.filter(created_by=user)
+    sales = sales.filter(created_by=user)
+    invoice_payments = invoice_payments.filter(created_by=user)
+    expenses = expenses.filter(created_by=user)
+    supplier_payments = supplier_payments.filter(created_by=user)
+    loan_payments = loan_payments.filter(created_by=user)
+    return deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments
+
+
+def _build_mobile_money_transactions(request):
+    user = request.user
+
+    start_date = request.GET.get('date_debut') or request.GET.get('start_date')
+    end_date = request.GET.get('date_fin') or request.GET.get('end_date')
+    transaction_type = request.GET.get('type')
+    store_id = request.GET.get('store')
+
+    if not transaction_type or transaction_type == 'all':
+        transaction_type = None
+
+    parsed_start_date = None
+    parsed_end_date = None
+    if start_date:
+        try:
+            parsed_start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        except ValueError:
+            parsed_start_date = None
+    if end_date:
+        try:
+            parsed_end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+        except ValueError:
+            parsed_end_date = None
+
+    deposits, withdrawals, sales, invoice_payments, expenses, supplier_payments, loan_payments = _get_user_scoped_mobile_money_sources(user)
+
+    if parsed_start_date:
+        deposits = deposits.filter(created_at__date__gte=parsed_start_date)
+        withdrawals = withdrawals.filter(created_at__date__gte=parsed_start_date)
+        sales = sales.filter(sale_date__gte=parsed_start_date)
+        invoice_payments = invoice_payments.filter(payment_date__gte=parsed_start_date)
+        expenses = expenses.filter(payment_date__gte=parsed_start_date)
+        supplier_payments = supplier_payments.filter(payment_date__gte=parsed_start_date)
+        loan_payments = loan_payments.filter(payment_date__gte=parsed_start_date)
+
+    if parsed_end_date:
+        deposits = deposits.filter(created_at__date__lte=parsed_end_date)
+        withdrawals = withdrawals.filter(created_at__date__lte=parsed_end_date)
+        sales = sales.filter(sale_date__lte=parsed_end_date)
+        invoice_payments = invoice_payments.filter(payment_date__lte=parsed_end_date)
+        expenses = expenses.filter(payment_date__lte=parsed_end_date)
+        supplier_payments = supplier_payments.filter(payment_date__lte=parsed_end_date)
+        loan_payments = loan_payments.filter(payment_date__lte=parsed_end_date)
+
+    if store_id:
+        deposits = deposits.filter(cashbox_session__cashbox__store_id=store_id)
+        withdrawals = withdrawals.filter(cashbox_session__cashbox__store_id=store_id)
+        sales = sales.filter(store_id=store_id)
+        invoice_payments = invoice_payments.filter(invoice__store_id=store_id)
+        expenses = expenses.filter(store_id=store_id)
+        supplier_payments = supplier_payments.filter(purchase_order__store_id=store_id)
+        loan_payments = loan_payments.filter(loan__store_id=store_id)
+
+    transactions = []
+
+    if transaction_type is None or transaction_type == 'depot':
+        for movement in deposits:
+            store_name = movement.cashbox_session.cashbox.store.name if movement.cashbox_session and movement.cashbox_session.cashbox and movement.cashbox_session.cashbox.store else 'N/A'
+            transactions.append({
+                'id': f'mm-dep-{movement.id}',
+                'date': movement.created_at.isoformat(),
+                'type': 'depot',
+                'amount': float(movement.amount),
+                'description': movement.description or 'Dépôt Mobile Money',
+                'store_name': store_name,
+                'balance_after': 0,
+            })
+
+        for sale in sales:
+            transactions.append({
+                'id': f'mm-sale-{sale.id}',
+                'date': sale.created_at.isoformat(),
+                'type': 'paiement',
+                'amount': float(sale.total_amount),
+                'description': f'Vente {sale.sale_number}',
+                'store_name': sale.store.name if sale.store else 'N/A',
+                'balance_after': 0,
+            })
+
+        for payment in invoice_payments:
+            transactions.append({
+                'id': f'mm-inv-{payment.id}',
+                'date': payment.created_at.isoformat(),
+                'type': 'paiement',
+                'amount': float(payment.amount),
+                'description': f'Paiement facture {payment.invoice.invoice_number}',
+                'store_name': payment.invoice.store.name if payment.invoice and payment.invoice.store else 'N/A',
+                'balance_after': 0,
+            })
+
+    if transaction_type is None or transaction_type == 'retrait':
+        for movement in withdrawals:
+            store_name = movement.cashbox_session.cashbox.store.name if movement.cashbox_session and movement.cashbox_session.cashbox and movement.cashbox_session.cashbox.store else 'N/A'
+            transactions.append({
+                'id': f'mm-wit-{movement.id}',
+                'date': movement.created_at.isoformat(),
+                'type': 'retrait',
+                'amount': float(movement.amount),
+                'description': movement.description or 'Retrait Mobile Money',
+                'store_name': store_name,
+                'balance_after': 0,
+            })
+
+        for expense in expenses:
+            transactions.append({
+                'id': f'mm-exp-{expense.id}',
+                'date': expense.created_at.isoformat(),
+                'type': 'retrait',
+                'amount': float(expense.amount),
+                'description': f'Dépense {expense.expense_number}',
+                'store_name': expense.store.name if expense.store else 'N/A',
+                'balance_after': 0,
+            })
+
+        for payment in supplier_payments:
+            transactions.append({
+                'id': f'mm-sup-{payment.id}',
+                'date': payment.created_at.isoformat(),
+                'type': 'retrait',
+                'amount': float(payment.amount),
+                'description': f'Règlement fournisseur {payment.supplier.name}',
+                'store_name': payment.purchase_order.store.name if payment.purchase_order and payment.purchase_order.store else 'N/A',
+                'balance_after': 0,
+            })
+
+        for payment in loan_payments:
+            transactions.append({
+                'id': f'mm-loan-{payment.id}',
+                'date': payment.created_at.isoformat(),
+                'type': 'retrait',
+                'amount': float(payment.amount),
+                'description': f'Remboursement emprunt {payment.loan.loan_number}',
+                'store_name': payment.loan.store.name if payment.loan and payment.loan.store else 'N/A',
+                'balance_after': 0,
+            })
+
+    transactions.sort(key=lambda x: x['date'])
+
+    balance = 0
+    for transaction in transactions:
+        if transaction['type'] in ['depot', 'paiement']:
+            balance += transaction['amount']
+        else:
+            balance -= transaction['amount']
+        transaction['balance_after'] = balance
+
+    total_deposits = sum(t['amount'] for t in transactions if t['type'] in ['depot', 'paiement'])
+    total_withdrawals = sum(t['amount'] for t in transactions if t['type'] == 'retrait')
+
+    return transactions, balance, total_deposits, total_withdrawals
+
+
+class MobileMoneyBalanceView(APIView):
+    def get(self, request):
+        _, balance, total_deposits, total_withdrawals = _build_mobile_money_transactions(request)
+        return Response({
+            'balance': balance,
+            'total_deposits': total_deposits,
+            'total_withdrawals': total_withdrawals,
+        })
+
+
+class MobileMoneyTransactionsListView(APIView):
+    def get(self, request):
+        transactions, balance, total_deposits, total_withdrawals = _build_mobile_money_transactions(request)
+
+        page = int(request.GET.get('page', 1))
+        page_size = int(request.GET.get('page_size', 20))
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated = transactions[start_idx:end_idx]
+
+        return Response({
+            'count': len(transactions),
+            'next': None if end_idx >= len(transactions) else f'?page={page + 1}',
+            'previous': None if page == 1 else f'?page={page - 1}',
+            'results': paginated,
+            'balance': balance,
+            'total_deposits': total_deposits,
+            'total_withdrawals': total_withdrawals,
+        })
+
+
+def _get_or_create_cashbox_session_for_store(store_id, user):
+    if not store_id:
+        return None
+
+    try:
+        store_id_int = int(store_id)
+    except (TypeError, ValueError):
+        return None
+
+    cashbox = Cashbox.objects.filter(store_id=store_id_int, is_active=True).first()
+    if not cashbox:
+        return None
+
+    session = CashboxSession.objects.filter(cashbox=cashbox, status='open').first()
+    if not session:
+        session = CashboxSession.objects.create(
+            cashbox=cashbox,
+            cashier=user,
+            opening_date=timezone.now(),
+            opening_balance=0,
+            status='open',
+            created_by=user,
+        )
+    return session
+
+
+class MobileMoneyDepositCreateView(APIView):
+    def post(self, request):
+        amount = request.data.get('amount')
+        description = request.data.get('description') or request.data.get('motif') or 'Dépôt Mobile Money'
+        date = request.data.get('date')
+        store_id = request.query_params.get('store') or request.data.get('store_id')
+
+        if not amount:
+            return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response({'error': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
+        except (TypeError, ValueError):
+            return Response({'error': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
+
+        last_movement = CashMovement.objects.filter(movement_number__startswith='MMD-').order_by('-created_at').first()
+        if last_movement:
+            try:
+                last_num = int(last_movement.movement_number.split('-')[1])
+                movement_number = f'MMD-{last_num + 1:05d}'
+            except (IndexError, ValueError):
+                movement_number = f'MMD-{CashMovement.objects.count() + 1:05d}'
+        else:
+            movement_number = 'MMD-00001'
+
+        session = _get_or_create_cashbox_session_for_store(store_id, request.user)
+
+        movement = CashMovement.objects.create(
+            movement_number=movement_number,
+            cashbox_session=session,
+            movement_type='out',
+            category='bank_deposit',
+            amount=amount,
+            payment_method='mobile_money',
+            description=description,
+            created_by=request.user,
+        )
+
+        if date:
+            try:
+                parsed_date = datetime.strptime(date, '%Y-%m-%d')
+                movement.created_at = timezone.make_aware(parsed_date)
+                movement.save(update_fields=['created_at'])
+            except ValueError:
+                pass
+
+        return Response({
+            'id': movement.id,
+            'date': movement.created_at.isoformat(),
+            'type': 'depot',
+            'amount': float(movement.amount),
+            'description': movement.description,
+            'movement_number': movement.movement_number,
+        }, status=status.HTTP_201_CREATED)
+
+
+class MobileMoneyWithdrawalCreateView(APIView):
+    def post(self, request):
+        amount = request.data.get('amount')
+        description = request.data.get('description') or request.data.get('motif') or 'Retrait Mobile Money'
+        date = request.data.get('date')
+        store_id = request.query_params.get('store') or request.data.get('store_id')
+
+        if not amount:
+            return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response({'error': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
+        except (TypeError, ValueError):
+            return Response({'error': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
+
+        _, balance, _, _ = _build_mobile_money_transactions(request)
+        if amount > balance:
+            return Response(
+                {'error': f'Solde Mobile Money insuffisant. Solde disponible: {balance:,.2f} FCFA'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        last_movement = CashMovement.objects.filter(movement_number__startswith='MMW-').order_by('-created_at').first()
+        if last_movement:
+            try:
+                last_num = int(last_movement.movement_number.split('-')[1])
+                movement_number = f'MMW-{last_num + 1:05d}'
+            except (IndexError, ValueError):
+                movement_number = f'MMW-{CashMovement.objects.count() + 1:05d}'
+        else:
+            movement_number = 'MMW-00001'
+
+        session = _get_or_create_cashbox_session_for_store(store_id, request.user)
+
+        movement = CashMovement.objects.create(
+            movement_number=movement_number,
+            cashbox_session=session,
+            movement_type='in',
+            category='bank_withdrawal',
+            amount=amount,
+            payment_method='mobile_money',
+            description=description,
+            created_by=request.user,
+        )
+
+        if date:
+            try:
+                parsed_date = datetime.strptime(date, '%Y-%m-%d')
+                movement.created_at = timezone.make_aware(parsed_date)
+                movement.save(update_fields=['created_at'])
+            except ValueError:
+                pass
+
+        return Response({
+            'id': movement.id,
+            'date': movement.created_at.isoformat(),
+            'type': 'retrait',
+            'amount': float(movement.amount),
+            'description': movement.description,
+            'movement_number': movement.movement_number,
+        }, status=status.HTTP_201_CREATED)
+
+
+class MobileMoneyTransactionsExportPDFView(APIView):
+    def get(self, request):
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+        from io import BytesIO
+
+        transactions, balance, total_deposits, total_withdrawals = _build_mobile_money_transactions(request)
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4))
+        elements = []
+
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#ea580c'),
+            spaceAfter=20,
+            alignment=TA_CENTER,
+        )
+
+        elements.append(Paragraph('HISTORIQUE MOBILE MONEY', title_style))
+        elements.append(Spacer(1, 12))
+
+        summary_data = [
+            ['Solde Mobile Money', f'{balance:,.2f} FCFA'],
+            ['Total Dépôts', f'{total_deposits:,.2f} FCFA'],
+            ['Total Retraits', f'{total_withdrawals:,.2f} FCFA'],
+        ]
+        summary_table = Table(summary_data, colWidths=[220, 200])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ffedd5')),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 16))
+
+        table_data = [['Date', 'Type', 'Description', 'Magasin', 'Montant', 'Solde Après']]
+        for transaction in transactions:
+            date_obj = datetime.fromisoformat(transaction['date'].replace('Z', '+00:00'))
+            table_data.append([
+                date_obj.strftime('%d/%m/%Y %H:%M'),
+                'Dépôt' if transaction['type'] in ['depot', 'paiement'] else 'Retrait',
+                transaction['description'],
+                transaction['store_name'],
+                f"{transaction['amount']:,.2f}",
+                f"{transaction['balance_after']:,.2f}",
+            ])
+
+        table = Table(table_data, colWidths=[110, 80, 260, 140, 100, 100])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ea580c')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fff7ed')]),
+        ]))
+        elements.append(table)
+
+        doc.build(elements)
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type='application/pdf')
+        response['Content-Disposition'] = 'attachment; filename="transactions_mobile_money.pdf"'
+        return response
+
+
+class MobileMoneyTransactionsExportExcelView(APIView):
+    def get(self, request):
+        transactions, balance, total_deposits, total_withdrawals = _build_mobile_money_transactions(request)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Transactions Mobile Money'
+
+        title_font = Font(size=14, bold=True, color='ea580c')
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='ea580c', end_color='ea580c', fill_type='solid')
+
+        ws['A1'] = 'HISTORIQUE MOBILE MONEY'
+        ws['A1'].font = title_font
+        ws.merge_cells('A1:F1')
+        ws['A1'].alignment = Alignment(horizontal='center')
+
+        ws['A3'] = 'Solde Mobile Money:'
+        ws['B3'] = f'{balance:,.2f} FCFA'
+        ws['A4'] = 'Total Dépôts:'
+        ws['B4'] = f'{total_deposits:,.2f} FCFA'
+        ws['A5'] = 'Total Retraits:'
+        ws['B5'] = f'{total_withdrawals:,.2f} FCFA'
+
+        for row in range(3, 6):
+            ws[f'A{row}'].font = Font(bold=True)
+
+        headers = ['Date', 'Type', 'Description', 'Magasin', 'Montant', 'Solde Après']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=7, column=col)
+            cell.value = header
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center')
+
+        for row_idx, transaction in enumerate(transactions, 8):
+            date_obj = datetime.fromisoformat(transaction['date'].replace('Z', '+00:00'))
+            ws.cell(row=row_idx, column=1).value = date_obj.strftime('%d/%m/%Y %H:%M')
+            ws.cell(row=row_idx, column=2).value = 'Dépôt' if transaction['type'] in ['depot', 'paiement'] else 'Retrait'
+            ws.cell(row=row_idx, column=3).value = transaction['description']
+            ws.cell(row=row_idx, column=4).value = transaction['store_name']
+            ws.cell(row=row_idx, column=5).value = f"{transaction['amount']:,.2f}"
+            ws.cell(row=row_idx, column=6).value = f"{transaction['balance_after']:,.2f}"
+
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 14
+        ws.column_dimensions['C'].width = 40
+        ws.column_dimensions['D'].width = 22
+        ws.column_dimensions['E'].width = 16
+        ws.column_dimensions['F'].width = 16
+
+        from io import BytesIO
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        response = HttpResponse(
+            buffer,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename="transactions_mobile_money.xlsx"'
+        return response
