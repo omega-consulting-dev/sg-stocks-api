@@ -1836,14 +1836,19 @@ def _get_or_create_cashbox_session_for_store(store_id, user):
 
     cashbox = Cashbox.objects.filter(store_id=store_id_int, is_active=True).first()
     if not cashbox:
-        code = f"CASH-MM-{store_id_int}-{int(timezone.now().timestamp())}"
-        cashbox = Cashbox.objects.create(
-            store=store,
-            name="Caisse principale",
-            code=code,
-            is_active=True,
-            created_by=user,
-        )
+        code = f"CASH-MM-{store_id_int}-{timezone.now().strftime('%Y%m%d%H%M%S%f')}"
+        try:
+            cashbox = Cashbox.objects.create(
+                store=store,
+                name="Caisse principale",
+                code=code,
+                is_active=True,
+                created_by=user,
+            )
+        except IntegrityError:
+            cashbox = Cashbox.objects.filter(store_id=store_id_int, is_active=True).first()
+            if not cashbox:
+                raise ValueError("Impossible de créer la caisse pour ce point de vente")
 
     session = CashboxSession.objects.filter(cashbox=cashbox, status='open').first()
     if not session:
@@ -1856,6 +1861,14 @@ def _get_or_create_cashbox_session_for_store(store_id, user):
             created_by=user,
         )
     return session
+
+
+def _generate_unique_movement_number(prefix):
+    for _ in range(20):
+        candidate = f"{prefix}-{timezone.now().strftime('%Y%m%d%H%M%S%f')}"
+        if not CashMovement.objects.filter(movement_number=candidate).exists():
+            return candidate
+    raise RuntimeError("Impossible de générer un numéro de mouvement unique")
 
 
 class MobileMoneyDepositCreateView(APIView):
@@ -1884,17 +1897,8 @@ class MobileMoneyDepositCreateView(APIView):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         movement = None
-        for _ in range(5):
-            last_movement = CashMovement.objects.filter(movement_number__startswith='MMD-').order_by('-created_at').first()
-            if last_movement:
-                try:
-                    last_num = int(last_movement.movement_number.split('-')[1])
-                    movement_number = f'MMD-{last_num + 1:05d}'
-                except (IndexError, ValueError):
-                    movement_number = f'MMD-{CashMovement.objects.count() + 1:05d}'
-            else:
-                movement_number = 'MMD-00001'
-
+        for _ in range(10):
+            movement_number = _generate_unique_movement_number('MMD')
             try:
                 with transaction.atomic():
                     movement = CashMovement.objects.create(
@@ -1966,17 +1970,8 @@ class MobileMoneyWithdrawalCreateView(APIView):
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         movement = None
-        for _ in range(5):
-            last_movement = CashMovement.objects.filter(movement_number__startswith='MMW-').order_by('-created_at').first()
-            if last_movement:
-                try:
-                    last_num = int(last_movement.movement_number.split('-')[1])
-                    movement_number = f'MMW-{last_num + 1:05d}'
-                except (IndexError, ValueError):
-                    movement_number = f'MMW-{CashMovement.objects.count() + 1:05d}'
-            else:
-                movement_number = 'MMW-00001'
-
+        for _ in range(10):
+            movement_number = _generate_unique_movement_number('MMW')
             try:
                 with transaction.atomic():
                     movement = CashMovement.objects.create(
