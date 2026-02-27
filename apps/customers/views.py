@@ -10,7 +10,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.db.models import Sum, Q, F
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from decimal import Decimal, InvalidOperation
 
 from core.utils.export_utils import ExcelExporter
@@ -372,6 +372,26 @@ class CustomerViewSet(viewsets.ModelViewSet):
                 payment_number = f"{invoice.invoice_number}-P{count:02d}"
             return payment_number
 
+        def _create_payment_with_retry(invoice, payment_date, amount_for_invoice, payment_method, reference, notes, user):
+            last_error = None
+            for _ in range(5):
+                try:
+                    payment_number = _generate_unique_customer_payment_number(invoice)
+                    return InvoicePayment.objects.create(
+                        payment_number=payment_number,
+                        invoice=invoice,
+                        payment_date=payment_date,
+                        amount=amount_for_invoice,
+                        payment_method=payment_method,
+                        reference=reference,
+                        notes=notes,
+                        created_by=user
+                    )
+                except IntegrityError as exc:
+                    last_error = exc
+            if last_error:
+                raise last_error
+
         try:
             # Récupérer les données du paiement
             invoice_id = request.data.get('invoice_id')
@@ -449,46 +469,44 @@ class CustomerViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Répartir le paiement sur les factures
-            remaining_amount = total_amount
-            payments_created = []
+            # Répartir le paiement sur les factures de manière atomique
+            with transaction.atomic():
+                remaining_amount = total_amount
+                payments_created = []
 
-            for invoice in invoices:
-                if remaining_amount <= 0:
-                    break
+                for invoice in invoices:
+                    if remaining_amount <= 0:
+                        break
 
-                current_balance = invoice.total_amount - invoice.paid_amount
-                amount_for_invoice = min(remaining_amount, current_balance)
+                    current_balance = invoice.total_amount - invoice.paid_amount
+                    amount_for_invoice = min(remaining_amount, current_balance)
 
-                if amount_for_invoice <= 0:
-                    continue
+                    if amount_for_invoice <= 0:
+                        continue
 
-                payment_number = _generate_unique_customer_payment_number(invoice)
+                    payment = _create_payment_with_retry(
+                        invoice=invoice,
+                        payment_date=payment_date,
+                        amount_for_invoice=amount_for_invoice,
+                        payment_method=payment_method,
+                        reference=reference,
+                        notes=notes,
+                        user=request.user,
+                    )
 
-                payment = InvoicePayment.objects.create(
-                    payment_number=payment_number,
-                    invoice=invoice,
-                    payment_date=payment_date,
-                    amount=amount_for_invoice,
-                    payment_method=payment_method,
-                    reference=reference,
-                    notes=notes,
-                    created_by=request.user
-                )
+                    invoice.refresh_from_db()
 
-                invoice.refresh_from_db()
+                    payments_created.append({
+                        'id': payment.id,
+                        'payment_number': payment.payment_number,
+                        'invoice_number': invoice.invoice_number,
+                        'amount': float(payment.amount),
+                        'payment_date': payment.payment_date.strftime('%Y-%m-%d'),
+                        'balance_before': float(current_balance),
+                        'balance_after': float(invoice.total_amount - invoice.paid_amount),
+                    })
 
-                payments_created.append({
-                    'id': payment.id,
-                    'payment_number': payment.payment_number,
-                    'invoice_number': invoice.invoice_number,
-                    'amount': float(payment.amount),
-                    'payment_date': payment.payment_date.strftime('%Y-%m-%d'),
-                    'balance_before': float(current_balance),
-                    'balance_after': float(invoice.total_amount - invoice.paid_amount),
-                })
-
-                remaining_amount -= amount_for_invoice
+                    remaining_amount -= amount_for_invoice
 
             return Response({
                 'success': True,
