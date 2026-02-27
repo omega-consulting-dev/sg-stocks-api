@@ -10,6 +10,7 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.db.models import Sum, Q, F
+from django.db import IntegrityError
 from decimal import Decimal, InvalidOperation
 
 from core.utils.export_utils import ExcelExporter
@@ -361,144 +362,149 @@ class CustomerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='create-payment', url_name='create-payment')
     def create_payment(self, request, pk=None):
         """Create a payment for a customer invoice. Can distribute payment across multiple invoices."""
-        print(f"=== CREATE_PAYMENT called for customer PK: {pk} ===")
-        print(f"Request data: {request.data}")
         customer = self.get_object()
-        print(f"Customer found: {customer.name} (ID: {customer.id})")
-        
-        # Récupérer les données du paiement
-        invoice_id = request.data.get('invoice_id')
-        amount = request.data.get('amount')
-        payment_method = request.data.get('payment_method', 'cash')
-        payment_date_str = request.data.get('payment_date')
-        reference = request.data.get('reference', '')
-        notes = request.data.get('notes', '')
-        
-        # Convertir payment_date si fourni
-        if payment_date_str:
-            try:
-                from datetime import datetime
-                payment_date = datetime.strptime(payment_date_str, '%Y-%m-%d').date()
-            except (ValueError, TypeError):
-                payment_date = timezone.now().date()
-        else:
-            payment_date = timezone.now().date()
-        
-        if not amount:
-            return Response(
-                {'error': 'amount est requis'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Vérifier le montant
-        try:
-            # Convertir en Decimal et arrondir à 2 décimales pour éviter les problèmes de précision
-            total_amount = Decimal(str(amount)).quantize(Decimal('0.01'))
-        except (ValueError, InvalidOperation):
-            return Response(
-                {'error': 'Montant invalide'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if total_amount <= 0:
-            return Response(
-                {'error': 'Le montant doit être supérieur à 0'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Si invoice_id est fourni, payer cette facture en priorité
-        # Sinon, récupérer toutes les factures impayées du client
-        if invoice_id:
-            try:
-                invoices = [Invoice.objects.get(id=invoice_id, customer=customer)]
-            except Invoice.DoesNotExist:
-                return Response(
-                    {'error': 'Facture introuvable pour ce client'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
-            # Récupérer toutes les factures impayées par date
-            # Statuts: draft, sent, overdue (tout sauf paid et cancelled)
-            all_invoices = Invoice.objects.filter(
-                customer=customer
-            ).exclude(
-                status__in=['paid', 'cancelled']
-            ).order_by('invoice_date')
-            
-            # Filtrer pour ne garder que celles avec un solde > 0
-            invoices = [inv for inv in all_invoices if inv.balance_due > 0]
-        
-        if not invoices or len(invoices) == 0:
-            return Response(
-                {'error': 'Aucune facture impayée trouvée'},
-                status=status.HTTP_404_NOT_FOUND
-            )
 
-        total_outstanding = sum((inv.balance_due for inv in invoices), Decimal('0'))
-        if total_amount > total_outstanding:
-            return Response(
-                {
-                    'error': (
-                        f'Le montant ({total_amount} FCFA) dépasse le reste dû '
-                        f'({total_outstanding} FCFA).'
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Répartir le paiement sur les factures
-        remaining_amount = total_amount
-        payments_created = []
-        
-        for invoice in invoices:
-            if remaining_amount <= 0:
-                break
-            
-            # Recalculer le solde restant de la facture
-            current_balance = invoice.total_amount - invoice.paid_amount
-            
-            # Calculer le montant à payer pour cette facture
-            amount_for_invoice = min(remaining_amount, current_balance)
-            
-            if amount_for_invoice <= 0:
-                continue
-            
-            # Créer le paiement
+        def _generate_unique_customer_payment_number(invoice):
             count = InvoicePayment.objects.filter(invoice=invoice).count() + 1
             payment_number = f"{invoice.invoice_number}-P{count:02d}"
-            
-            payment = InvoicePayment.objects.create(
-                payment_number=payment_number,
-                invoice=invoice,
-                payment_date=payment_date,
-                amount=amount_for_invoice,
-                payment_method=payment_method,
-                reference=reference,
-                notes=notes,
-                created_by=request.user
+            while InvoicePayment.objects.filter(payment_number=payment_number).exists():
+                count += 1
+                payment_number = f"{invoice.invoice_number}-P{count:02d}"
+            return payment_number
+
+        try:
+            # Récupérer les données du paiement
+            invoice_id = request.data.get('invoice_id')
+            amount = request.data.get('amount')
+            payment_method = request.data.get('payment_method', 'cash')
+            payment_date_str = request.data.get('payment_date')
+            reference = request.data.get('reference', '')
+            notes = request.data.get('notes', '')
+
+            # Convertir payment_date si fourni
+            if payment_date_str:
+                try:
+                    from datetime import datetime
+                    payment_date = datetime.strptime(payment_date_str, '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    payment_date = timezone.now().date()
+            else:
+                payment_date = timezone.now().date()
+
+            if not amount:
+                return Response(
+                    {'error': 'amount est requis'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Vérifier le montant
+            try:
+                total_amount = Decimal(str(amount)).quantize(Decimal('0.01'))
+            except (ValueError, InvalidOperation):
+                return Response(
+                    {'error': 'Montant invalide'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if total_amount <= 0:
+                return Response(
+                    {'error': 'Le montant doit être supérieur à 0'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Si invoice_id est fourni, payer cette facture en priorité
+            # Sinon, récupérer toutes les factures impayées du client
+            if invoice_id:
+                try:
+                    invoices = [Invoice.objects.get(id=invoice_id, customer=customer)]
+                except Invoice.DoesNotExist:
+                    return Response(
+                        {'error': 'Facture introuvable pour ce client'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            else:
+                all_invoices = Invoice.objects.filter(
+                    customer=customer
+                ).exclude(
+                    status__in=['paid', 'cancelled']
+                ).order_by('invoice_date')
+
+                invoices = [inv for inv in all_invoices if inv.balance_due > 0]
+
+            if not invoices or len(invoices) == 0:
+                return Response(
+                    {'error': 'Aucune facture impayée trouvée'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            total_outstanding = sum((inv.balance_due for inv in invoices), Decimal('0'))
+            if total_amount > total_outstanding:
+                return Response(
+                    {
+                        'error': (
+                            f'Le montant ({total_amount} FCFA) dépasse le reste dû '
+                            f'({total_outstanding} FCFA).'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Répartir le paiement sur les factures
+            remaining_amount = total_amount
+            payments_created = []
+
+            for invoice in invoices:
+                if remaining_amount <= 0:
+                    break
+
+                current_balance = invoice.total_amount - invoice.paid_amount
+                amount_for_invoice = min(remaining_amount, current_balance)
+
+                if amount_for_invoice <= 0:
+                    continue
+
+                payment_number = _generate_unique_customer_payment_number(invoice)
+
+                payment = InvoicePayment.objects.create(
+                    payment_number=payment_number,
+                    invoice=invoice,
+                    payment_date=payment_date,
+                    amount=amount_for_invoice,
+                    payment_method=payment_method,
+                    reference=reference,
+                    notes=notes,
+                    created_by=request.user
+                )
+
+                invoice.refresh_from_db()
+
+                payments_created.append({
+                    'id': payment.id,
+                    'payment_number': payment.payment_number,
+                    'invoice_number': invoice.invoice_number,
+                    'amount': float(payment.amount),
+                    'payment_date': payment.payment_date.strftime('%Y-%m-%d'),
+                    'balance_before': float(current_balance),
+                    'balance_after': float(invoice.total_amount - invoice.paid_amount),
+                })
+
+                remaining_amount -= amount_for_invoice
+
+            return Response({
+                'success': True,
+                'total_amount': float(total_amount),
+                'amount_applied': float(total_amount - remaining_amount),
+                'remaining_amount': float(remaining_amount),
+                'payments': payments_created,
+                'message': f'{len(payments_created)} paiement(s) créé(s) avec succès'
+            }, status=status.HTTP_201_CREATED)
+        except IntegrityError:
+            return Response(
+                {'error': 'Conflit lors de la création du paiement. Veuillez réessayer.'},
+                status=status.HTTP_409_CONFLICT
             )
-            
-            # Le signal post_save se charge de recalculer paid_amount et status
-            # On rafraîchit juste l'objet pour avoir les valeurs à jour
-            invoice.refresh_from_db()
-            
-            payments_created.append({
-                'id': payment.id,
-                'payment_number': payment.payment_number,
-                'invoice_number': invoice.invoice_number,
-                'amount': float(payment.amount),
-                'payment_date': payment.payment_date.strftime('%Y-%m-%d'),
-                'balance_before': float(current_balance),
-                'balance_after': float(invoice.total_amount - invoice.paid_amount),
-            })
-            
-            remaining_amount -= amount_for_invoice
-        
-        return Response({
-            'success': True,
-            'total_amount': float(total_amount),
-            'amount_applied': float(total_amount - remaining_amount),
-            'remaining_amount': float(remaining_amount),
-            'payments': payments_created,
-            'message': f'{len(payments_created)} paiement(s) créé(s) avec succès'
-        }, status=status.HTTP_201_CREATED)
+        except Exception:
+            return Response(
+                {'error': 'Erreur serveur lors de l\'enregistrement du règlement client.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
