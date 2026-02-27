@@ -20,6 +20,7 @@ from apps.expenses.models import Expense
 from apps.suppliers.models import SupplierPayment
 from apps.loans.models import LoanPayment
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1891,10 +1892,10 @@ class MobileMoneyDepositCreateView(APIView):
             return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            amount = float(amount)
+            amount = Decimal(str(amount))
             if amount <= 0:
                 return Response({'error': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, InvalidOperation):
             return Response({'error': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
@@ -1949,16 +1950,17 @@ class MobileMoneyWithdrawalCreateView(APIView):
             return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            amount = float(amount)
+            amount = Decimal(str(amount))
             if amount <= 0:
                 return Response({'error': 'Le montant doit être supérieur à 0'}, status=status.HTTP_400_BAD_REQUEST)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, InvalidOperation):
             return Response({'error': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
 
         _, balance, _, _ = _build_mobile_money_transactions(request)
-        if amount > balance:
+        balance_decimal = Decimal(str(balance))
+        if amount > balance_decimal:
             return Response(
-                {'error': f'Solde Mobile Money insuffisant. Solde disponible: {balance:,.2f} FCFA'},
+                {'error': f'Solde Mobile Money insuffisant. Solde disponible: {balance_decimal:,.2f} FCFA'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
