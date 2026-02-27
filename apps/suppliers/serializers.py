@@ -167,7 +167,6 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
         from decimal import Decimal
         from django.db import transaction
         from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
-        from django.db.models import Sum
 
         validated_data['payment_number'] = generate_unique_payment_number()
         
@@ -176,12 +175,13 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
         po = validated_data.get('purchase_order')
         payment_method = validated_data.get('payment_method')
         request = self.context['request']
+        store = None
+        cashbox_session = None
         
         # Vérifier et créer le mouvement de caisse/banque si nécessaire
         if payment_method in ['cash', 'bank_transfer']:
             # Récupérer le store depuis la requête (ou utiliser le premier store disponible)
             store_id = request.data.get('store_id')
-            store = None
             
             if store_id:
                 from apps.inventory.models import Store
@@ -218,33 +218,6 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
                         'created_by': request.user
                     }
                 )
-                
-                # Vérifier le solde disponible avant de créer le mouvement
-                if payment_method == 'cash':
-                    current_balance = cashbox.current_balance
-                    if amount > current_balance:
-                        raise serializers.ValidationError({
-                            'amount': f'Solde insuffisant. Solde disponible: {current_balance} FCFA'
-                        })
-                
-                elif payment_method == 'bank_transfer':
-                    # Calculer le solde bancaire disponible
-                    bank_deposits = CashMovement.objects.filter(
-                        category='bank_deposit',
-                        movement_type='out'
-                    ).aggregate(total=Sum('amount'))['total'] or 0
-                    
-                    bank_withdrawals = CashMovement.objects.filter(
-                        category='bank_withdrawal',
-                        movement_type='in'
-                    ).aggregate(total=Sum('amount'))['total'] or 0
-                    
-                    bank_balance = bank_deposits - bank_withdrawals
-                    
-                    if amount > bank_balance:
-                        raise serializers.ValidationError({
-                            'amount': f'Solde bancaire insuffisant. Solde disponible: {bank_balance} FCFA'
-                        })
         
         with transaction.atomic():
             # Créer le paiement
@@ -290,10 +263,6 @@ class SupplierPaymentSerializer(serializers.ModelSerializer):
                 # car l'argent ne passe pas par la caisse physique.
                 # Le SupplierPayment avec payment_method='bank_transfer' est suffisant
                 # et sera pris en compte dans le calcul du solde bancaire via get_bank_balance()
-                    
-                    # Mettre à jour le solde de la caisse
-                    cashbox.current_balance += amount
-                    cashbox.save()
             
             remaining_amount = amount
             

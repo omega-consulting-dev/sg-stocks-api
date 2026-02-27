@@ -293,15 +293,24 @@ class CustomerViewSet(viewsets.ModelViewSet):
         
         data = []
         for customer in customers:
-            # Calculer total_invoiced et total_paid pour TOUTES les factures
-            invoices = customer.invoices.all()
-            
-            # Inclure uniquement les clients qui ont au moins une facture
+            invoices = customer.invoices.exclude(status='cancelled')
+
             if invoices.exists():
-                total_invoiced = sum(invoice.total_amount for invoice in invoices)
-                total_paid = sum(invoice.paid_amount for invoice in invoices)
+                total_invoiced = Decimal('0')
+                total_paid = Decimal('0')
+
+                for invoice in invoices:
+                    invoice_total = invoice.total_amount or Decimal('0')
+                    invoice_paid = invoice.paid_amount or Decimal('0')
+                    paid_capped = min(invoice_paid, invoice_total)
+
+                    total_invoiced += invoice_total
+                    total_paid += paid_capped
+
                 balance = total_invoiced - total_paid
-                
+                if balance < 0:
+                    balance = Decimal('0')
+
                 data.append({
                     'id': customer.id,
                     'customer_code': customer.customer_code,
@@ -423,6 +432,18 @@ class CustomerViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': 'Aucune facture impayée trouvée'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+        total_outstanding = sum((inv.balance_due for inv in invoices), Decimal('0'))
+        if total_amount > total_outstanding:
+            return Response(
+                {
+                    'error': (
+                        f'Le montant ({total_amount} FCFA) dépasse le reste dû '
+                        f'({total_outstanding} FCFA).'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST
             )
         
         # Répartir le paiement sur les factures
