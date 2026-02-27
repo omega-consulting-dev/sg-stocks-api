@@ -44,73 +44,84 @@ def update_invoice_paid_amount_on_payment_save(sender, instance, created, **kwar
     if created and instance.status == 'success':
         from apps.cashbox.models import CashMovement, Cashbox, CashboxSession
         from django.utils import timezone
-        
+
         payment_method = instance.payment_method
         store = invoice.store
-        
-        # Pour les paiements en espèces, créer un mouvement de caisse
-        if payment_method == 'cash':
-            # Récupérer ou créer la caisse du store
-            cashbox, _ = Cashbox.objects.get_or_create(
-                store=store,
-                is_active=True,
-                defaults={
-                    'name': f'Caisse {store.name}',
-                    'code': f'CASH-{store.code}',
-                    'created_by': instance.created_by
-                }
+
+        try:
+            # Pour les paiements en espèces, créer un mouvement de caisse
+            if payment_method == 'cash':
+                # Récupérer la dernière caisse active du store, sinon en créer une
+                cashbox = Cashbox.objects.filter(store=store, is_active=True).order_by('-id').first()
+                if not cashbox:
+                    cashbox = Cashbox.objects.create(
+                        store=store,
+                        is_active=True,
+                        name=f'Caisse {store.name}',
+                        code=f'CASH-{store.code or store.id}',
+                        created_by=instance.created_by
+                    )
+
+                # Récupérer la dernière session ouverte, sinon en créer une
+                cashbox_session = CashboxSession.objects.filter(
+                    cashbox=cashbox,
+                    status='open'
+                ).order_by('-opening_date', '-id').first()
+
+                if not cashbox_session:
+                    cashbox_session = CashboxSession.objects.create(
+                        cashbox=cashbox,
+                        status='open',
+                        cashier=instance.created_by,
+                        opening_date=timezone.now(),
+                        opening_balance=0,
+                        created_by=instance.created_by
+                    )
+
+                # Générer le numéro de mouvement
+                last_movement = CashMovement.objects.order_by('-id').first()
+                movement_count = 1
+                if last_movement and last_movement.movement_number:
+                    try:
+                        import re
+                        match = re.search(r'\d+', last_movement.movement_number)
+                        if match:
+                            movement_count = int(match.group()) + 1
+                    except (ValueError, AttributeError):
+                        movement_count = CashMovement.objects.count() + 1
+
+                # Créer le mouvement de caisse (entrée d'argent)
+                CashMovement.objects.create(
+                    movement_number=f'INV-PAY-{movement_count:05d}',
+                    cashbox_session=cashbox_session,
+                    movement_type='in',
+                    category='customer_payment',
+                    amount=instance.amount,
+                    payment_method='cash',
+                    reference=instance.payment_number,
+                    description=f'Paiement facture {invoice.invoice_number} - Client: {invoice.customer.name}',
+                    created_by=instance.created_by
+                )
+
+                # Mettre à jour le solde de la caisse
+                cashbox.current_balance += instance.amount
+                cashbox.save()
+
+                logger.info(f"Signal: Mouvement de caisse créé pour paiement {instance.payment_number}")
+
+            # Pour les paiements par carte, virement ou mobile money, l'argent va directement en banque/mobile money
+            # On ne crée PAS de CashMovement, le InvoicePayment suffit
+            # Le calcul du solde bancaire/mobile money prendra en compte
+            # les InvoicePayment avec payment_method='card', 'bank_transfer' ou 'mobile_money'
+            elif payment_method in ['card', 'transfer', 'bank_transfer', 'mobile_money']:
+                destination = 'banque' if payment_method in ['card', 'transfer', 'bank_transfer'] else 'Mobile Money (MTN/Orange)'
+                logger.info(f"Signal: Paiement par {payment_method} - argent ajouté directement en {destination}")
+        except Exception as exc:
+            logger.exception(
+                "Signal: Échec création mouvement de caisse pour paiement %s (%s)",
+                instance.payment_number,
+                str(exc),
             )
-            
-            # Récupérer ou créer une session ouverte
-            cashbox_session, _ = CashboxSession.objects.get_or_create(
-                cashbox=cashbox,
-                status='open',
-                defaults={
-                    'cashier': instance.created_by,
-                    'opening_date': timezone.now(),
-                    'opening_balance': 0,
-                    'created_by': instance.created_by
-                }
-            )
-            
-            # Générer le numéro de mouvement
-            last_movement = CashMovement.objects.order_by('-id').first()
-            movement_count = 1
-            if last_movement and last_movement.movement_number:
-                try:
-                    import re
-                    match = re.search(r'\\d+', last_movement.movement_number)
-                    if match:
-                        movement_count = int(match.group()) + 1
-                except (ValueError, AttributeError):
-                    movement_count = CashMovement.objects.count() + 1
-            
-            # Créer le mouvement de caisse (entrée d'argent)
-            CashMovement.objects.create(
-                movement_number=f'INV-PAY-{movement_count:05d}',
-                cashbox_session=cashbox_session,
-                movement_type='in',
-                category='customer_payment',
-                amount=instance.amount,
-                payment_method='cash',
-                reference=instance.payment_number,
-                description=f'Paiement facture {invoice.invoice_number} - Client: {invoice.customer.name}',
-                created_by=instance.created_by
-            )
-            
-            # Mettre à jour le solde de la caisse
-            cashbox.current_balance += instance.amount
-            cashbox.save()
-            
-            logger.info(f"Signal: Mouvement de caisse créé pour paiement {instance.payment_number}")
-        
-        # Pour les paiements par carte, virement ou mobile money, l'argent va directement en banque/mobile money
-        # On ne crée PAS de CashMovement, le InvoicePayment suffit
-        # Le calcul du solde bancaire/mobile money prendra en compte
-        # les InvoicePayment avec payment_method='card', 'bank_transfer' ou 'mobile_money'
-        elif payment_method in ['card', 'transfer', 'bank_transfer', 'mobile_money']:
-            destination = 'banque' if payment_method in ['card', 'transfer', 'bank_transfer'] else 'Mobile Money (MTN/Orange)'
-            logger.info(f"Signal: Paiement par {payment_method} - argent ajouté directement en {destination}")
 
 
 @receiver(post_delete, sender=InvoicePayment)
