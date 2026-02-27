@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from django.utils import timezone
 from django.http import HttpResponse
 from django.db.models import Q, Sum, F
+from django.db import IntegrityError, transaction
 from apps.cashbox.models import Cashbox, CashboxSession, CashMovement
 from apps.cashbox.serializers import (
     CashboxSerializer, 
@@ -1820,16 +1821,29 @@ class MobileMoneyTransactionsListView(APIView):
 
 def _get_or_create_cashbox_session_for_store(store_id, user):
     if not store_id:
-        return None
+        raise ValueError("Le point de vente est requis")
 
     try:
         store_id_int = int(store_id)
     except (TypeError, ValueError):
-        return None
+        raise ValueError("Point de vente invalide")
+
+    from apps.inventory.models import Store
+
+    store = Store.objects.filter(id=store_id_int, is_active=True).first()
+    if not store:
+        raise ValueError("Point de vente introuvable ou inactif")
 
     cashbox = Cashbox.objects.filter(store_id=store_id_int, is_active=True).first()
     if not cashbox:
-        return None
+        code = f"CASH-MM-{store_id_int}-{int(timezone.now().timestamp())}"
+        cashbox = Cashbox.objects.create(
+            store=store,
+            name="Caisse principale",
+            code=code,
+            is_active=True,
+            created_by=user,
+        )
 
     session = CashboxSession.objects.filter(cashbox=cashbox, status='open').first()
     if not session:
@@ -1851,6 +1865,9 @@ class MobileMoneyDepositCreateView(APIView):
         date = request.data.get('date')
         store_id = request.query_params.get('store') or request.data.get('store_id')
 
+        if not store_id:
+            return Response({'error': 'Le point de vente est requis'}, status=status.HTTP_400_BAD_REQUEST)
+
         if not amount:
             return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1861,28 +1878,42 @@ class MobileMoneyDepositCreateView(APIView):
         except (TypeError, ValueError):
             return Response({'error': 'Montant invalide'}, status=status.HTTP_400_BAD_REQUEST)
 
-        last_movement = CashMovement.objects.filter(movement_number__startswith='MMD-').order_by('-created_at').first()
-        if last_movement:
+        try:
+            session = _get_or_create_cashbox_session_for_store(store_id, request.user)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        movement = None
+        for _ in range(5):
+            last_movement = CashMovement.objects.filter(movement_number__startswith='MMD-').order_by('-created_at').first()
+            if last_movement:
+                try:
+                    last_num = int(last_movement.movement_number.split('-')[1])
+                    movement_number = f'MMD-{last_num + 1:05d}'
+                except (IndexError, ValueError):
+                    movement_number = f'MMD-{CashMovement.objects.count() + 1:05d}'
+            else:
+                movement_number = 'MMD-00001'
+
             try:
-                last_num = int(last_movement.movement_number.split('-')[1])
-                movement_number = f'MMD-{last_num + 1:05d}'
-            except (IndexError, ValueError):
-                movement_number = f'MMD-{CashMovement.objects.count() + 1:05d}'
-        else:
-            movement_number = 'MMD-00001'
+                with transaction.atomic():
+                    movement = CashMovement.objects.create(
+                        movement_number=movement_number,
+                        cashbox_session=session,
+                        movement_type='out',
+                        category='bank_deposit',
+                        amount=amount,
+                        payment_method='mobile_money',
+                        description=description,
+                        created_by=request.user,
+                    )
+                break
+            except IntegrityError:
+                movement = None
+                continue
 
-        session = _get_or_create_cashbox_session_for_store(store_id, request.user)
-
-        movement = CashMovement.objects.create(
-            movement_number=movement_number,
-            cashbox_session=session,
-            movement_type='out',
-            category='bank_deposit',
-            amount=amount,
-            payment_method='mobile_money',
-            description=description,
-            created_by=request.user,
-        )
+        if movement is None:
+            return Response({'error': 'Impossible de générer un numéro de mouvement unique. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if date:
             try:
@@ -1909,6 +1940,9 @@ class MobileMoneyWithdrawalCreateView(APIView):
         date = request.data.get('date')
         store_id = request.query_params.get('store') or request.data.get('store_id')
 
+        if not store_id:
+            return Response({'error': 'Le point de vente est requis'}, status=status.HTTP_400_BAD_REQUEST)
+
         if not amount:
             return Response({'error': 'Le montant est requis'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1926,28 +1960,42 @@ class MobileMoneyWithdrawalCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        last_movement = CashMovement.objects.filter(movement_number__startswith='MMW-').order_by('-created_at').first()
-        if last_movement:
+        try:
+            session = _get_or_create_cashbox_session_for_store(store_id, request.user)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        movement = None
+        for _ in range(5):
+            last_movement = CashMovement.objects.filter(movement_number__startswith='MMW-').order_by('-created_at').first()
+            if last_movement:
+                try:
+                    last_num = int(last_movement.movement_number.split('-')[1])
+                    movement_number = f'MMW-{last_num + 1:05d}'
+                except (IndexError, ValueError):
+                    movement_number = f'MMW-{CashMovement.objects.count() + 1:05d}'
+            else:
+                movement_number = 'MMW-00001'
+
             try:
-                last_num = int(last_movement.movement_number.split('-')[1])
-                movement_number = f'MMW-{last_num + 1:05d}'
-            except (IndexError, ValueError):
-                movement_number = f'MMW-{CashMovement.objects.count() + 1:05d}'
-        else:
-            movement_number = 'MMW-00001'
+                with transaction.atomic():
+                    movement = CashMovement.objects.create(
+                        movement_number=movement_number,
+                        cashbox_session=session,
+                        movement_type='in',
+                        category='bank_withdrawal',
+                        amount=amount,
+                        payment_method='mobile_money',
+                        description=description,
+                        created_by=request.user,
+                    )
+                break
+            except IntegrityError:
+                movement = None
+                continue
 
-        session = _get_or_create_cashbox_session_for_store(store_id, request.user)
-
-        movement = CashMovement.objects.create(
-            movement_number=movement_number,
-            cashbox_session=session,
-            movement_type='in',
-            category='bank_withdrawal',
-            amount=amount,
-            payment_method='mobile_money',
-            description=description,
-            created_by=request.user,
-        )
+        if movement is None:
+            return Response({'error': 'Impossible de générer un numéro de mouvement unique. Réessayez.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         if date:
             try:
