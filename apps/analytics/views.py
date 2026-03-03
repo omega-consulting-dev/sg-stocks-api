@@ -472,6 +472,7 @@ class DashboardViewSet(viewsets.ViewSet):
         """Financial summary including loans, expenses, etc. (filtered by user)."""
         user = request.user
         month_start = timezone.now().date().replace(day=1)
+        year_start = timezone.now().date().replace(month=1, day=1)
         store_filter = request.query_params.get('store')  # Filtre par store
         
         # Get filtered querysets
@@ -501,26 +502,38 @@ class DashboardViewSet(viewsets.ViewSet):
         }
         
         # Expenses - FILTRÉ par utilisateur
+        # Inclure paid + approved pour refléter les dépenses déjà validées
+        expenses_accounted_qs = expenses_qs.filter(status__in=['paid', 'approved'])
         expenses_summary = {
-            'this_month': expenses_qs.filter(
-                expense_date__gte=month_start,
-                status='paid'
+            'this_month': expenses_accounted_qs.filter(
+                expense_date__gte=month_start
             ).aggregate(total=Sum('amount'))['total'] or 0,
+            'this_year': expenses_accounted_qs.filter(
+                expense_date__gte=year_start
+            ).aggregate(total=Sum('amount'))['total'] or 0,
+            'total': expenses_accounted_qs.aggregate(total=Sum('amount'))['total'] or 0,
             'pending': expenses_qs.filter(
                 status__in=['pending', 'approved']
             ).aggregate(total=Sum('amount'))['total'] or 0,
         }
         
         # Revenue - FILTRÉ par utilisateur
+        revenue_qs = sales_qs.filter(status__in=['confirmed', 'completed'])
         revenue_summary = {
-            'this_month': sales_qs.filter(
-                sale_date__gte=month_start,
-                status='confirmed'
+            'this_month': revenue_qs.filter(
+                sale_date__gte=month_start
             ).aggregate(total=Sum('total_amount'))['total'] or 0,
+            'this_year': revenue_qs.filter(
+                sale_date__gte=year_start
+            ).aggregate(total=Sum('total_amount'))['total'] or 0,
+            'total': revenue_qs.aggregate(total=Sum('total_amount'))['total'] or 0,
         }
         
         # Calculate profit
-        profit = float(revenue_summary['this_month']) - float(expenses_summary['this_month'])
+        profit = {
+            'this_month': float(revenue_summary['this_month']) - float(expenses_summary['this_month']),
+            'this_year': float(revenue_summary['this_year']) - float(expenses_summary['this_year']),
+        }
         
         return Response({
             'loans': loans_summary,
