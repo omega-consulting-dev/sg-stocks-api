@@ -130,23 +130,29 @@ class DashboardViewSet(viewsets.ViewSet):
             sales_qs = sales_qs.filter(store__in=assigned_stores)
             expenses_qs = expenses_qs.filter(store__in=assigned_stores)
         
-        # Sales statistics - TOUTES LES VENTES (pas seulement confirmées)
-        # Car dans la facturation, on peut avoir des ventes qui génèrent du CA sans être confirmées
-        sales_today = sales_qs.filter(sale_date=today).aggregate(
+        # Sales statistics - uniquement les ventes validées
+        revenue_sales_qs = sales_qs.filter(status__in=['confirmed', 'completed'])
+
+        sales_today = revenue_sales_qs.filter(sale_date=today).aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
         
-        sales_month = sales_qs.filter(
+        sales_month = revenue_sales_qs.filter(
             sale_date__gte=month_start
         ).aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
         
-        sales_year = sales_qs.filter(
+        sales_year = revenue_sales_qs.filter(
             sale_date__gte=year_start
         ).aggregate(
+            total=Sum('total_amount'),
+            count=Count('id')
+        )
+
+        sales_total = revenue_sales_qs.aggregate(
             total=Sum('total_amount'),
             count=Count('id')
         )
@@ -248,6 +254,10 @@ class DashboardViewSet(viewsets.ViewSet):
                 'this_year': {
                     'amount': float(sales_year['total'] or 0),
                     'count': sales_year['count']
+                },
+                'total': {
+                    'amount': float(sales_total['total'] or 0),
+                    'count': sales_total['count']
                 }
             },
             'stock': stock_stats,
@@ -295,15 +305,52 @@ class DashboardViewSet(viewsets.ViewSet):
         
         sales_data = sales_qs.filter(
             sale_date__gte=start_date,
-            status='confirmed'
+            status__in=['confirmed', 'completed']
         ).annotate(
             period=trunc_func('sale_date')
         ).values('period').annotate(
             total_amount=Sum('total_amount'),
             total_sales=Count('id')
         ).order_by('period')
-        
-        return Response(list(sales_data))
+
+        # Dépenses réelles par période (plus de répartition artificielle)
+        expenses_qs = self._get_expenses_queryset(user)
+        if store_filter:
+            expenses_qs = expenses_qs.filter(store_id=store_filter)
+
+        expenses_data = expenses_qs.filter(
+            expense_date__gte=start_date,
+            status__in=['paid', 'approved']
+        ).annotate(
+            period=trunc_func('expense_date')
+        ).values('period').annotate(
+            total_expenses=Sum('amount')
+        ).order_by('period')
+
+        sales_map = {
+            str(item['period']): {
+                'total_amount': float(item['total_amount'] or 0),
+                'total_sales': item['total_sales'] or 0,
+            }
+            for item in sales_data
+        }
+        expenses_map = {
+            str(item['period']): float(item['total_expenses'] or 0)
+            for item in expenses_data
+        }
+
+        all_periods = sorted(set(list(sales_map.keys()) + list(expenses_map.keys())))
+        merged = []
+        for period_key in all_periods:
+            sales_item = sales_map.get(period_key, {'total_amount': 0.0, 'total_sales': 0})
+            merged.append({
+                'period': period_key,
+                'total_amount': sales_item['total_amount'],
+                'total_sales': sales_item['total_sales'],
+                'total_expenses': expenses_map.get(period_key, 0.0),
+            })
+
+        return Response(merged)
     
     @action(detail=False, methods=['get'])
     def top_products(self, request):
