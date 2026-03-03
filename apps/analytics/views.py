@@ -318,9 +318,21 @@ class DashboardViewSet(viewsets.ViewSet):
         if store_filter:
             expenses_qs = expenses_qs.filter(store_id=store_filter)
 
-        expenses_data = expenses_qs.filter(
+        # Dépenses payées: grouper par date de paiement (flux réel)
+        paid_expenses_data = expenses_qs.filter(
+            status='paid',
+            payment_date__isnull=False,
+            payment_date__gte=start_date,
+        ).annotate(
+            period=trunc_func('payment_date')
+        ).values('period').annotate(
+            total_expenses=Sum('amount')
+        ).order_by('period')
+
+        # Dépenses approuvées non encore payées: grouper par date de dépense
+        approved_expenses_data = expenses_qs.filter(
+            status='approved',
             expense_date__gte=start_date,
-            status__in=['paid', 'approved']
         ).annotate(
             period=trunc_func('expense_date')
         ).values('period').annotate(
@@ -334,10 +346,13 @@ class DashboardViewSet(viewsets.ViewSet):
             }
             for item in sales_data
         }
-        expenses_map = {
-            str(item['period']): float(item['total_expenses'] or 0)
-            for item in expenses_data
-        }
+        expenses_map = {}
+        for item in paid_expenses_data:
+            key = str(item['period'])
+            expenses_map[key] = expenses_map.get(key, 0.0) + float(item['total_expenses'] or 0)
+        for item in approved_expenses_data:
+            key = str(item['period'])
+            expenses_map[key] = expenses_map.get(key, 0.0) + float(item['total_expenses'] or 0)
 
         all_periods = sorted(set(list(sales_map.keys()) + list(expenses_map.keys())))
         merged = []
